@@ -27,8 +27,9 @@ src/lawcorpus/
 ├── retrieval/      벡터·키워드검색·RRF·리랭킹·그래프확장
 ├── refs.py         인용 추출/파싱/존재검증 (조문·판례 번호)
 ├── search.py       promotion_score / hybrid_search (원자 검색 조합)
-├── schema/         PG DDL + Neo4j 제약 (schema.sql, neo4j_schema.cypher)
-└── cli.py          apply-schema / ingest-laws / ingest-cases / backfill / update-validity
+├── schema/         PG DDL + Neo4j 제약 (schema.sql, neo4j_schema.cypher, apply.py)
+├── commands.py     CLI 서브커맨드 구현 (ingest/backfill/update-validity/load-sample)
+└── cli.py          argparse 진입점 — apply-schema/ingest-laws/ingest-cases/backfill/update-validity/load-sample
 ```
 
 이 repo가 포함하지 않는 것: LLM 호출이 필요한 검색 기법(HyDE), 질의 분해, RAG 오케스트레이션.
@@ -40,3 +41,4 @@ src/lawcorpus/
 - [`docs/architecture.md`](docs/architecture.md) — 저장소 구성, 청킹, 판례 유효성 처리
 - [`docs/decisions.md`](docs/decisions.md) — 핵심 결정 기록
 - [`docs/setup.md`](docs/setup.md) — DB 스키마 적용, 인제스트 순서
+- [`docs/changelog.md`](docs/changelog.md) — 릴리스 이력
