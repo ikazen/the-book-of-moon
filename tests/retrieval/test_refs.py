@@ -50,6 +50,20 @@ def test_extract_refs_branch_article():
     assert "법인세법 제18조의3" in refs
 
 
+def test_extract_refs_enforcement_decree():
+    from lawcorpus.refs import extract_refs
+    text = "소득세법 시행령 제10조에 구체적 기준이 있다."
+    refs = extract_refs(text)
+    assert "소득세법 시행령 제10조" in refs
+
+
+def test_extract_refs_enforcement_rule():
+    from lawcorpus.refs import extract_refs
+    text = "법인세법 시행규칙 제3조를 참고하라."
+    refs = extract_refs(text)
+    assert "법인세법 시행규칙 제3조" in refs
+
+
 class _FakeConn:
     """article_chunks/case_chunks 동등 매칭을 시뮬레이션하는 fake connection.
 
@@ -147,6 +161,16 @@ async def test_verify_refs_exist_multiple(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_verify_refs_exist_enforcement_decree(monkeypatch):
+    """시행령 인용도 "법령명 시행령"으로 재조립되어 컬럼 동등 매칭된다(#12)."""
+    _patch_pool(monkeypatch, articles={("소득세법 시행령", "제10조")})
+
+    from lawcorpus.refs import verify_refs_exist
+    result = await verify_refs_exist(["소득세법 시행령 제10조"])
+    assert result["소득세법 시행령 제10조"] is True
+
+
+@pytest.mark.asyncio
 async def test_verify_refs_exist_case_no(monkeypatch):
     _patch_pool(monkeypatch, cases={"2018두12345"})
 
@@ -192,3 +216,15 @@ class TestParseRef:
         """"제18조의3" 가지번호 조문도 article_no 전체(의N 포함)로 파싱된다."""
         from lawcorpus.refs import parse_ref
         assert parse_ref("법인세법 제18조의3") == ("article", ("법인세법", "제18조의3"))
+
+    def test_enforcement_decree(self):
+        from lawcorpus.refs import parse_ref
+        assert parse_ref("소득세법 시행령 제10조") == ("article", ("소득세법 시행령", "제10조"))
+
+    def test_enforcement_rule(self):
+        from lawcorpus.refs import parse_ref
+        assert parse_ref("법인세법 시행규칙 제3조") == ("article", ("법인세법 시행규칙", "제3조"))
+
+    def test_abbreviation_normalized(self):
+        from lawcorpus.refs import parse_ref
+        assert parse_ref("조특법 제10조") == ("article", ("조세특례제한법", "제10조"))

@@ -4,8 +4,17 @@ import re
 
 from lawcorpus.db.pg import get_pool
 
-# 조문 번호: "XXX법 제N조" 또는 가지번호 포함 "XXX법 제N조의M" 형식(pot-of-greed #40)
-_RE_ARTICLE = re.compile(r"(?P<law>[\w가-힣]+법)\s*(?P<article>제\d+조(?:의\d+)?)(?:\s*제\d+항)?")
+# 조문 번호: "XXX법(시행령/시행규칙 포함) 제N조" 또는 가지번호 포함 "...제N조의M" 형식
+# (pot-of-greed #40, the-book-of-moon #12)
+_RE_ARTICLE = re.compile(
+    r"(?P<law>[\w가-힣]+(?:법|법률))(?:\s*(?P<sub>시행령|시행규칙))?"
+    r"\s*(?P<article>제\d+조(?:의\d+)?)(?:\s*제\d+항)?"
+)
+# 실무에서 흔한 법령 약칭 → article_chunks.law_name 저장형 정규화
+_LAW_ABBREV = {
+    "조특법": "조세특례제한법",
+    "국기법": "국세기본법",
+}
 # 판례 번호: 연도+사건부호(화이트리스트)+번호 (예: 2018두12345, 2021도1234)
 # 사건부호로 한정하지 않으면 "2018년6월15일" 같은 날짜 표현의 "2018년6"이
 # 오탐된다(pot-of-greed #6).
@@ -36,7 +45,10 @@ def parse_ref(ref: str) -> tuple[str, tuple[str, ...]] | None:
     ref = ref.strip()
     m = _RE_ARTICLE.match(ref)
     if m:
-        return "article", (m.group("law"), m.group("article"))
+        law = _LAW_ABBREV.get(m.group("law"), m.group("law"))
+        if m.group("sub"):
+            law = f"{law} {m.group('sub')}"
+        return "article", (law, m.group("article"))
     if _RE_CASE.fullmatch(ref):
         return "case", (ref,)
     return None
