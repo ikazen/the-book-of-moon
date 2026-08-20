@@ -1,4 +1,4 @@
-# law-corpus
+# the-book-of-moon
 
 한국 세법/판례 코퍼스 — 수집·저장·조회 공통 라이브러리. Python 3.12+ · PostgreSQL(pgvector) + Neo4j.
 
@@ -9,7 +9,7 @@
 ## 빠른 시작
 
 ```bash
-pip install "lawcorpus @ git+ssh://git@github.com/ikazen/law-corpus.git@v0.1.0"
+pip install "lawcorpus @ git+https://github.com/ikazen/the-book-of-moon.git@v0.1.0"
 cp .env.example .env   # LAWCORPUS_PG_DSN 등 채우기
 lawcorpus apply-schema
 lawcorpus ingest-laws --law 소득세법 --law 법인세법
