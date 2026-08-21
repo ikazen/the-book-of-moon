@@ -30,7 +30,7 @@ class Article:
 @dataclass(frozen=True, slots=True)
 class ArticleVersion:
     article_key: int
-    moleg_article_key: int | None
+    moleg_article_key: str | None   # '{법령일련번호}:{조문키}'
     article_id: int
     title: str | None
     body: str
