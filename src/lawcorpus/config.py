@@ -27,6 +27,13 @@ class LawCorpusSettings(BaseSettings):
     rerank_top_k: int = 5
     rrf_k: int = 60
 
+    # 원본 오브젝트 스토리지 (S3 호환, MinIO) — mac-server가 intermittent라 fs 폴백 필수
+    raw_s3_endpoint: str = ""
+    raw_s3_bucket: str = "lawcorpus-raw"
+    raw_s3_access_key: str = ""
+    raw_s3_secret_key: str = ""
+    raw_dir: str = "./data/raw"
+
 
 @lru_cache
 def get_settings() -> LawCorpusSettings:
