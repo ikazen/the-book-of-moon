@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS article (
 -- 검증하지 못해 그걸 PK로 쓰면 대량 적재 중 깨질 수 있다.
 CREATE TABLE IF NOT EXISTS article_version (
     article_key       bigserial PRIMARY KEY,
-    moleg_article_key bigint UNIQUE,
+    moleg_article_key text UNIQUE,   -- '{법령일련번호}:{조문키}' — 조문키 자체는 법령 문서 내에서만 유일
     article_id        bigint NOT NULL REFERENCES article,
     title             text,
     body              text   NOT NULL,
