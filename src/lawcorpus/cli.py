@@ -12,7 +12,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lawcorpus")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("apply-schema", help="PG DDL + Neo4j 제약을 멱등 적용")
+    p_schema = sub.add_parser("apply-schema", help="PG DDL + Neo4j 제약을 멱등 적용")
+    p_schema.add_argument("--drop", action="store_true", help="적용 전 구 스키마/레이블 DROP (파괴적)")
+    p_schema.add_argument("--yes-i-mean-it", action="store_true", dest="confirm_drop",
+                           help="--drop 실행에 필요한 명시적 확인")
 
     p_laws = sub.add_parser("ingest-laws", help="법제처 OPEN API에서 법령 조문 수집")
     p_laws.add_argument("--law", action="append", required=True, dest="laws", help="법령명 (반복 가능)")
@@ -38,7 +41,9 @@ def main() -> None:
     settings = get_settings()
 
     if args.command == "apply-schema":
-        asyncio.run(apply_schema(settings))
+        if args.drop and not args.confirm_drop:
+            raise SystemExit("--drop은 파괴적 작업입니다. --yes-i-mean-it을 함께 지정하세요.")
+        asyncio.run(apply_schema(settings, drop=args.drop))
     elif args.command == "ingest-laws":
         asyncio.run(commands.ingest_laws(args.laws, settings))
     elif args.command == "ingest-cases":
