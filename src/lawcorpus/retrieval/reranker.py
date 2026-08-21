@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import httpx
 
-from lawcorpus.types import Chunk
+from lawcorpus.types import Hit
 
 
-async def rerank(query: str, chunks: list[Chunk], settings, top_k: int | None = None) -> list[Chunk]:
-    """Rerank chunks using bge-reranker-v2-m3 via Ollama /api/rerank.
+async def rerank(query: str, chunks: list[Hit], settings, top_k: int | None = None) -> list[Hit]:
+    """Rerank hits using bge-reranker-v2-m3 via Ollama /api/rerank.
 
     Falls back to original order if the endpoint is unavailable.
     top_k defaults to settings.rerank_top_k (5).
@@ -40,11 +42,9 @@ async def rerank(query: str, chunks: list[Chunk], settings, top_k: int | None = 
         return chunks[:k]
 
     scored = sorted(results, key=lambda r: r["relevance_score"], reverse=True)
-    reranked: list[Chunk] = []
+    reranked: list[Hit] = []
     for item in scored[:k]:
         idx = item["index"]
         if 0 <= idx < len(chunks):
-            chunk = chunks[idx]
-            chunk.score = float(item["relevance_score"])
-            reranked.append(chunk)
+            reranked.append(replace(chunks[idx], score=float(item["relevance_score"])))
     return reranked
