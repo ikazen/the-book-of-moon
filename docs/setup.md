@@ -31,8 +31,14 @@ PG DDL(`schema/schema.sql`) + Neo4j 제약(`schema/neo4j_schema.cypher`)을 멱�
 `LAWCORPUS_LAW_API_OC` 설정 후 순서대로 실행:
 
 ```bash
-lawcorpus ingest-laws --law 소득세법 --law 법인세법 --law 부가가치세법
-lawcorpus ingest-cases --query 소득세 --query 법인세 --query 부가가치세
+lawcorpus ingest-laws \
+  --law 소득세법 --law "소득세법 시행령" --law "소득세법 시행규칙" \
+  --law 법인세법 --law "법인세법 시행령" --law "법인세법 시행규칙" \
+  --law 부가가치세법 --law "부가가치세법 시행령" --law "부가가치세법 시행규칙" \
+  --law 국세기본법 --law "국세기본법 시행령" \
+  --law 조세특례제한법 --law "조세특례제한법 시행령"
+lawcorpus ingest-cases --query 소득세 --query 법인세 --query 부가가치세 \
+                       --query 국세기본법 --query 조세특례
 lawcorpus backfill                # 임베딩 채우기
 lawcorpus update-validity         # validity_flag 계산
 ```

@@ -33,6 +33,10 @@ chunk_id 규약 (조문):
 항:   art_<법령명>_<조번호>_<항번호>  예) art_소득세법_14_1
 ```
 
+시행령/시행규칙은 `<법령명>`에 공백이 포함된다(예) `art_소득세법 시행령_10`. PG/Neo4j 모두
+공백을 그대로 허용하므로 문제 없다 — `refs.py`의 인용 검증도 같은 형식("XXX법 시행령")으로
+재조립해 비교한다(the-book-of-moon #12).
+
 ## 검색 (`retrieval/`, `search.py`)
 
 원자 함수: `vector_search`(코사인 hnsw) / `keyword_search`(tsvector, `'simple'` config — 한국어 형태소
