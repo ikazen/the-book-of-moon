@@ -162,11 +162,13 @@ CREATE INDEX IF NOT EXISTS loophole_candidate_article_idx ON loophole_candidate 
 CREATE TABLE IF NOT EXISTS article_embedding (
     chunk_id      bigserial PRIMARY KEY,
     article_key   bigint NOT NULL REFERENCES article_version,
-    chunk_path    text   NOT NULL,   -- '제1항제3호가목'
+    chunk_path    text   NOT NULL,   -- '제1항' (목까지는 안 쪼갠다 — ingest/tree.py::iter_chunks)
     chunk_text    text   NOT NULL,
     embedding     vector(1024),
     is_current    boolean NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS article_embedding_article_key_chunk_path_key
+    ON article_embedding (article_key, chunk_path);
 CREATE INDEX IF NOT EXISTS article_embedding_hnsw_idx
     ON article_embedding USING hnsw (embedding vector_cosine_ops) WHERE is_current;
 CREATE INDEX IF NOT EXISTS article_embedding_text_trgm_idx
