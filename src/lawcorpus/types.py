@@ -126,6 +126,16 @@ class Hit:
 
 
 @dataclass(frozen=True, slots=True)
+class UnpatchedCandidate:
+    """find_unpatched의 원시 결과 — loophole_candidate 행으로 굳히기 전 단계(status/risk_score
+    미배정). 실제 적재는 #37이 한다."""
+
+    article_id: int
+    ruling_id: str
+    decided_on: date
+
+
+@dataclass(frozen=True, slots=True)
 class Subgraph:
     """expand_refs 등 그래프 확장 질의의 결과 — article_id(논리 조문) 기준."""
 

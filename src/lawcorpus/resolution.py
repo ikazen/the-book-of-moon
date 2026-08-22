@@ -2,7 +2,7 @@
 
 as_of 없이 법령 상태를 묻는 건 허용하지 않는다(결정 H) — 과거 거래에 현행법을 적용하는
 사고가 조용히 섞이는 걸 막는다. Python은 타입힌트를 런타임에 강제하지 않으므로
-_require_as_of가 그 역할을 대신한다.
+require_as_of가 그 역할을 대신한다.
 
 resolve_citation은 설계문서 9절이 "최대 난관"이라 부른 부분이다: "구 OO법(1996.12.30.
 법률 제5193호로 전부개정되고, 2003.12.30. 법률 제7010호로 개정되기 전의 것)"처럼 판례가
@@ -30,13 +30,13 @@ _HISTORICAL_DATE_RE = re.compile(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.")
 _ARTICLE_NO_PATTERN = r"제(?P<art_no>\d+)조(?:의(?P<branch_no>\d+))?"
 
 
-def _require_as_of(as_of: date) -> date:
+def require_as_of(as_of: date) -> date:
     if not isinstance(as_of, date):
         raise TypeError("as_of는 date 필수 — 기본값 today 금지(결정 H)")
     return as_of
 
 
-def _row_to_version(row) -> ArticleVersion:
+def row_to_article_version(row) -> ArticleVersion:
     tree = row["tree"]
     return ArticleVersion(
         article_key=row["article_key"],
@@ -57,7 +57,7 @@ def _row_to_version(row) -> ArticleVersion:
 
 
 async def get_article(statute: str, art_no: int, branch_no: int, as_of: date) -> ArticleVersion | None:
-    as_of = _require_as_of(as_of)
+    as_of = require_as_of(as_of)
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -70,11 +70,28 @@ async def get_article(statute: str, art_no: int, branch_no: int, as_of: date) ->
             """,
             statute, art_no, branch_no, as_of,
         )
-    return _row_to_version(row) if row else None
+    return row_to_article_version(row) if row else None
+
+
+async def get_article_by_id(article_id: int, as_of: date) -> ArticleVersion | None:
+    """article_id(논리 조문, 그래프 질의 결과 등에서 얻은 값)로 시점 해소한다.
+    get_article은 (statute, art_no, branch_no)로 사람이 알아보는 식별자를 받지만
+    그래프 질의는 article_id만 돌려주므로 이 경로가 따로 필요하다."""
+    as_of = require_as_of(as_of)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM article_version
+            WHERE article_id = $1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $2)
+            """,
+            article_id, as_of,
+        )
+    return row_to_article_version(row) if row else None
 
 
 async def get_effective_law(statute: str, as_of: date) -> list[ArticleVersion]:
-    as_of = _require_as_of(as_of)
+    as_of = require_as_of(as_of)
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -88,7 +105,7 @@ async def get_effective_law(statute: str, as_of: date) -> list[ArticleVersion]:
             """,
             statute, as_of,
         )
-    return [_row_to_version(r) for r in rows]
+    return [row_to_article_version(r) for r in rows]
 
 
 def _build_citation_regex(law_names: list[str]) -> re.Pattern:
