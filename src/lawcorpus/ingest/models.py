@@ -163,3 +163,26 @@ class RawLawHierarchy:    # target=lsStmd 응답 — 법률 -> 시행령 -> 시�
     mst: str
     law_name: str
     entries: tuple[RawLawHierarchyEntry, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RawRulingListItem:   # prec/expc/detc/admrul 공통 목록 항목
+    ruling_id: str
+    source: str        # 대법원/법제처/헌법재판소/행정규칙
+    case_no: str
+    title: str
+    decided_at: str    # YYYYMMDD
+
+
+@dataclass(frozen=True, slots=True)
+class RawRuling:   # prec/expc/detc/admrul 공통 상세 (실측 결과 필드가 상이해 소스별 파서가 이 타입으로 수렴)
+    ruling_id: str
+    source: str            # 대법원/법제처/헌법재판소/행정규칙
+    case_no: str
+    decided_at: str        # YYYYMMDD
+    title: str             # 안건명/사건명/행정규칙명
+    gist: str               # 판시사항/질의요지/(결정)판시사항/행정규칙명
+    body: str                # 판결요지+판례내용/회답+이유/전문/조문내용 전체
+    ref_articles: tuple[str, ...] = ()   # 참조조문 원문 (expc/admrul은 구조화 필드 없어 빈 튜플)
+    ref_cases: tuple[str, ...] = ()       # 참조판례 원문
+    raw_uri: str = ""

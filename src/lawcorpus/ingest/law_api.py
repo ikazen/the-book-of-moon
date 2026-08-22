@@ -34,6 +34,8 @@ from lawcorpus.ingest.models import (
     RawLawHierarchy,
     RawLawHierarchyEntry,
     RawLawListItem,
+    RawRuling,
+    RawRulingListItem,
     RawSubClause,
 )
 from lawcorpus.storage.raw_store import put_raw
@@ -372,7 +374,132 @@ async def fetch_law_hierarchy(mst: str, settings) -> RawLawHierarchy:
 
 
 # ---------------------------------------------------------------------------
-# 판례
+# 쟁송 + 해석 통합 (prec/expc/detc/admrul -> RawRuling)
+#
+# 실측(#23) 결과 4개 target의 목록/상세 구조가 예상보다 서로 달라(루트/항목 태그명,
+# ID 파라미터, 필드명 전부 제각각) 공통 XML 태그맵 하나로는 못 묶는다 — 소스별 파서를
+# 두되 전부 RawRuling으로 수렴시켜 "통합 매퍼"를 출력 타입 레벨에서 달성한다.
+# ---------------------------------------------------------------------------
+
+_RULING_LIST_CONFIG: dict[str, dict[str, str | None]] = {
+    "prec":   {"item_tag": "prec",  "id_field": "판례일련번호",        "case_no_field": "사건번호", "title_field": "사건명", "date_field": "선고일자"},
+    "expc":   {"item_tag": "expc",  "id_field": "법령해석례일련번호",  "case_no_field": "안건번호", "title_field": "안건명", "date_field": "회신일자"},
+    "detc":   {"item_tag": "Detc",  "id_field": "헌재결정례일련번호",  "case_no_field": "사건번호", "title_field": "사건명", "date_field": "종국일자"},
+    "admrul": {"item_tag": "admrul", "id_field": "행정규칙일련번호",   "case_no_field": None,      "title_field": "행정규칙명", "date_field": "발령일자"},
+}
+_RULING_SOURCE_NAME = {"prec": "법원", "expc": "법제처", "detc": "헌법재판소", "admrul": "행정규칙"}
+
+
+async def list_rulings(target: str, query: str, settings, max_pages: int = 10) -> list[RawRulingListItem]:
+    config = _RULING_LIST_CONFIG[target]
+    base = settings.law_api_base_url
+    results: list[RawRulingListItem] = []
+    page = 1
+    async with httpx.AsyncClient() as client:
+        while page <= max_pages:
+            root = await _get_xml(
+                client,
+                f"{base}/lawSearch.do",
+                {"OC": settings.law_api_oc, "target": target, "type": "XML",
+                 "query": query, "page": page, "display": _PAGE_SIZE},
+            )
+            items = root.findall(config["item_tag"])
+            for item in items:
+                court = _txt(item.find("법원명")) if target == "prec" else ""
+                case_no_field = config["case_no_field"]
+                results.append(
+                    RawRulingListItem(
+                        ruling_id=_txt(item.find(config["id_field"])),
+                        source=court or _RULING_SOURCE_NAME[target],
+                        case_no=_txt(item.find(case_no_field)) if case_no_field else "",
+                        title=_txt(item.find(config["title_field"])),
+                        decided_at=_txt(item.find(config["date_field"])),
+                    )
+                )
+            total = int(_txt(root.find("totalCnt"), "0"))
+            if len(results) >= total or len(items) < _PAGE_SIZE:
+                break
+            page += 1
+    return results
+
+
+def _parse_prec_detail(root: ET.Element) -> RawRuling:
+    return RawRuling(
+        ruling_id=_txt(root.find("판례정보일련번호")),
+        source=_txt(root.find("법원명")) or "법원",
+        case_no=_txt(root.find("사건번호")),
+        decided_at=_txt(root.find("선고일자")),
+        title=_txt(root.find("사건명")),
+        gist=_txt(root.find("판시사항")),
+        body="\n".join(p for p in (_txt(root.find("판결요지")), _txt(root.find("판례내용"))) if p),
+        ref_articles=tuple(_split_refs(_txt(root.find("참조조문")))),
+        ref_cases=tuple(_split_refs(_txt(root.find("참조판례")))),
+    )
+
+
+def _parse_expc_detail(root: ET.Element) -> RawRuling:
+    return RawRuling(
+        ruling_id=_txt(root.find("법령해석례일련번호")),
+        source="법제처",
+        case_no=_txt(root.find("안건번호")),
+        decided_at=_txt(root.find("해석일자")),
+        title=_txt(root.find("안건명")),
+        gist=_txt(root.find("질의요지")),
+        body="\n".join(p for p in (_txt(root.find("회답")), _txt(root.find("이유"))) if p),
+    )
+
+
+def _parse_detc_detail(root: ET.Element) -> RawRuling:
+    return RawRuling(
+        ruling_id=_txt(root.find("헌재결정례일련번호")),
+        source="헌법재판소",
+        case_no=_txt(root.find("사건번호")),
+        decided_at=_txt(root.find("종국일자")),
+        title=_txt(root.find("사건명")),
+        gist=_txt(root.find("판시사항")),
+        body="\n".join(p for p in (_txt(root.find("결정요지")), _txt(root.find("전문"))) if p),
+        ref_articles=tuple(_split_refs(_txt(root.find("참조조문")))),
+        ref_cases=tuple(_split_refs(_txt(root.find("참조판례")))),
+    )
+
+
+def _parse_admrul_detail(root: ET.Element) -> RawRuling:
+    info = root.find("행정규칙기본정보")
+    body = "\n".join(_txt(el) for el in root.findall("조문내용"))
+    name = _txt(info.find("행정규칙명")) if info is not None else ""
+    return RawRuling(
+        ruling_id=_txt(info.find("행정규칙일련번호")) if info is not None else "",
+        source="행정규칙",
+        case_no="",
+        decided_at=_txt(info.find("발령일자")) if info is not None else "",
+        title=name,
+        gist=name,
+        body=body,
+    )
+
+
+_RULING_DETAIL_PARSERS = {
+    "prec": _parse_prec_detail,
+    "expc": _parse_expc_detail,
+    "detc": _parse_detc_detail,
+    "admrul": _parse_admrul_detail,
+}
+
+
+async def fetch_ruling(target: str, ruling_id: str, settings) -> RawRuling:
+    async with httpx.AsyncClient() as client:
+        root, raw = await _get_xml_raw(
+            client,
+            f"{settings.law_api_base_url}/lawService.do",
+            {"OC": settings.law_api_oc, "target": target, "type": "XML", "ID": ruling_id},
+        )
+    raw_uri = await put_raw(settings, f"{target}/{ruling_id}.xml", raw)
+    ruling = _RULING_DETAIL_PARSERS[target](root)
+    return replace(ruling, raw_uri=raw_uri)
+
+
+# ---------------------------------------------------------------------------
+# 판례 (구 스키마 전용 — case_mapper.py와 함께 이관 예정)
 # ---------------------------------------------------------------------------
 
 def _parse_case_list(root: ET.Element) -> list[RawCaseListItem]:
