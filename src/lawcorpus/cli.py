@@ -5,6 +5,7 @@ import asyncio
 
 from lawcorpus import commands
 from lawcorpus.config import get_settings
+from lawcorpus.graph.build import build_graph
 from lawcorpus.schema.apply import apply_schema
 
 
@@ -38,6 +39,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_eval = sub.add_parser("eval-citations", help="resolve_citation 파서 정확도(precision/recall) 측정")
     p_eval.add_argument("--golden", required=True, help="골든셋 JSONL 경로")
+
+    sub.add_parser("build-graph", help="PG(SoT)에서 읽어 Neo4j를 전량 재생성")
 
     p_cases = sub.add_parser("ingest-cases", help="법제처 OPEN API에서 판례 수집 (참조조문 스코프 필터)")
     p_cases.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
@@ -75,6 +78,8 @@ def main() -> None:
         asyncio.run(commands.ingest_rulings(args.target, args.queries, settings, max_pages=args.max_pages))
     elif args.command == "eval-citations":
         asyncio.run(commands.eval_citations(args.golden, settings))
+    elif args.command == "build-graph":
+        asyncio.run(build_graph(settings))
     elif args.command == "ingest-cases":
         asyncio.run(commands.ingest_cases(args.queries, settings, max_pages=args.max_pages))
     elif args.command == "backfill":
