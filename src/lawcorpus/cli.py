@@ -42,6 +42,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("build-graph", help="PG(SoT)에서 읽어 Neo4j를 전량 재생성")
 
+    p_rewrite = sub.add_parser("load-rewrite-map", help="전부개정 조문번호 수작업 매핑 CSV 적재")
+    p_rewrite.add_argument("--csv", required=True, help="rewrite_map.csv 경로")
+
     p_cases = sub.add_parser("ingest-cases", help="법제처 OPEN API에서 판례 수집 (참조조문 스코프 필터)")
     p_cases.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
     p_cases.add_argument("--max-pages", type=int, default=50)
@@ -80,6 +83,8 @@ def main() -> None:
         asyncio.run(commands.eval_citations(args.golden, settings))
     elif args.command == "build-graph":
         asyncio.run(build_graph(settings))
+    elif args.command == "load-rewrite-map":
+        asyncio.run(commands.load_rewrite_map(args.csv, settings))
     elif args.command == "ingest-cases":
         asyncio.run(commands.ingest_cases(args.queries, settings, max_pages=args.max_pages))
     elif args.command == "backfill":

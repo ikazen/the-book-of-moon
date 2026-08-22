@@ -82,6 +82,15 @@ CREATE TABLE IF NOT EXISTS article_diff (
 CREATE INDEX IF NOT EXISTS article_diff_to_version_idx ON article_diff (to_version);
 CREATE INDEX IF NOT EXISTS article_diff_thresholds_idx ON article_diff USING gin (added_thresholds);
 
+-- 전부개정으로 조문 번호 체계가 갈아엎어졌을 때의 수작업 매핑(설계문서 9절 — 자동 매핑 불가).
+-- eflaw의 조문이동이전/이동이후 필드가 실제 값을 주는 사례를 찾으면 자동 채움으로 전환 검토.
+CREATE TABLE IF NOT EXISTS article_rewrite_map (
+    from_article_id bigint NOT NULL REFERENCES article,
+    to_article_id   bigint NOT NULL REFERENCES article,
+    note            text,
+    PRIMARY KEY (from_article_id, to_article_id)
+);
+
 -- 부칙 경과조치
 CREATE TABLE IF NOT EXISTS addendum (
     addendum_id     bigserial PRIMARY KEY,

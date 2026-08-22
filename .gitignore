@@ -9,4 +9,4 @@ venv/
 *.pyc
 .pytest_cache/
 .mypy_cache/
-/data/
+/data/raw/
