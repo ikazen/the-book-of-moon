@@ -61,7 +61,10 @@ ALTER TABLE article_version ADD CONSTRAINT article_version_no_overlap
     EXCLUDE USING gist (
         article_id WITH =,
         daterange(valid_from, coalesce(valid_to, 'infinity'::date), '[)') WITH &&
-    );
+    ) DEFERRABLE INITIALLY DEFERRED;
+-- DEFERRABLE 필수: 새 버전은 valid_to=NULL(열린 구간)로 먼저 삽입되고 close_versions()가
+-- 같은 트랜잭션 안에서 이전 버전의 valid_to를 다음 버전 시작일로 좁혀준다. IMMEDIATE였다면
+-- INSERT 시점에 기존 열린 구간과 항상 겹쳐 실패한다(이력 백필 시 매번 위반 — 실측 확인).
 
 CREATE INDEX IF NOT EXISTS article_version_article_id_valid_from_idx
     ON article_version (article_id, valid_from DESC);
