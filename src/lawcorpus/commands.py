@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib.resources
 import json
 from datetime import date
@@ -12,6 +13,7 @@ from neo4j import AsyncGraphDatabase
 from pgvector.asyncpg import register_vector
 
 from lawcorpus.ingest.addendum_parser import parse_addendum
+from lawcorpus.ingest.diff import added_thresholds, diff_trees
 from lawcorpus.ingest.case_mapper import MappedCase, map_case
 from lawcorpus.ingest.law_api import (
     fetch_case,
@@ -184,12 +186,13 @@ async def _insert_article_versions(conn: asyncpg.Connection, mapped: MappedStatu
                 """
                 INSERT INTO article_version
                     (moleg_article_key, article_id, title, body, tree, valid_from,
-                     promulgated_on, promulgation_no, revision_type, is_full_rewrite)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+                     promulgated_on, promulgation_no, revision_type, is_full_rewrite, revision_reason)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (article_id, valid_from) DO NOTHING
                 """,
                 v.moleg_article_key, article_id, v.title, v.body, json.dumps(v.tree),
                 v.valid_from, v.promulgated_on, v.promulgation_no, v.revision_type, v.is_full_rewrite,
+                v.revision_reason,
             )
             if result == "INSERT 0 1":
                 inserted += 1
@@ -323,6 +326,74 @@ async def ingest_addenda(laws: list[str], settings) -> None:
 
         total = await conn.fetchval("SELECT count(*) FROM addendum")
         print(f"\n완료. addendum 전체: {total}행")
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# build-diffs
+# ---------------------------------------------------------------------------
+
+async def _diffable_pairs(conn: asyncpg.Connection, statute_id: int) -> list[tuple[dict, dict]]:
+    """statute의 각 조문에서 valid_from 순으로 인접한 (from_version, to_version) 행 쌍을 찾는다."""
+    rows = await conn.fetch(
+        """
+        SELECT av.article_key, av.article_id, av.tree, av.valid_from, av.revision_reason
+        FROM article_version av
+        JOIN article a ON a.article_id = av.article_id
+        WHERE a.statute_id = $1
+        ORDER BY av.article_id, av.valid_from
+        """,
+        statute_id,
+    )
+    by_article: dict[int, list] = {}
+    for row in rows:
+        by_article.setdefault(row["article_id"], []).append(row)
+
+    return [
+        (versions[i], versions[i + 1])
+        for versions in by_article.values()
+        for i in range(len(versions) - 1)
+    ]
+
+
+def _load_tree(raw: object) -> dict:
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+async def build_diffs(laws: list[str], settings) -> None:
+    """이미 적재된 조문 버전들 사이에서 연속된 쌍마다 diff + added_thresholds를 계산한다.
+    현재 버전이 1개뿐인 조문은 비교 대상이 없어 건너뛴다 — 역사 스냅샷을 더 적재해야 diff가 생긴다."""
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    try:
+        for law_name in laws:
+            row = await conn.fetchrow("SELECT statute_id FROM statute WHERE name = $1", law_name)
+            if row is None:
+                print(f"[{law_name}] statute를 찾지 못함(ingest-statutes 선행 필요), 건너뜀")
+                continue
+
+            pairs = await _diffable_pairs(conn, row["statute_id"])
+            inserted = 0
+            async with conn.transaction():
+                for from_row, to_row in pairs:
+                    diff = diff_trees(_load_tree(from_row["tree"]), _load_tree(to_row["tree"]))
+                    thresholds = [dataclasses.asdict(t) for t in added_thresholds(diff)]
+                    result = await conn.execute(
+                        """
+                        INSERT INTO article_diff
+                            (from_version, to_version, diff, added_thresholds, reason_text, reason_source)
+                        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+                        ON CONFLICT (from_version, to_version) DO NOTHING
+                        """,
+                        from_row["article_key"], to_row["article_key"], json.dumps(diff),
+                        json.dumps(thresholds), to_row["revision_reason"], "법제처",
+                    )
+                    if result == "INSERT 0 1":
+                        inserted += 1
+            print(f"[{law_name}] 비교 가능 쌍 {len(pairs)}건, diff 신규 {inserted}건")
+
+        total = await conn.fetchval("SELECT count(*) FROM article_diff")
+        print(f"\n완료. article_diff 전체: {total}행")
     finally:
         await conn.close()
 

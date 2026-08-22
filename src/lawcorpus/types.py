@@ -42,6 +42,7 @@ class ArticleVersion:
     promulgation_no: int | None
     revision_type: str | None  # 제정/일부개정/전부개정
     is_full_rewrite: bool
+    revision_reason: str | None  # 제개정이유내용(법제처 제공)
     ingested_at: datetime
 
 
