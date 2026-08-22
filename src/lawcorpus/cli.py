@@ -49,7 +49,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_rulings = sub.add_parser("ingest-rulings", help="판례/법령해석례/헌재결정례/행정규칙 통합 수집")
     p_rulings.add_argument("--target", required=True, choices=["prec", "expc", "detc", "admrul"])
-    p_rulings.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
+    p_rulings.add_argument("--query", action="append", dest="queries", help="검색어 (반복 가능)")
+    p_rulings.add_argument("--article", dest="article_whitelist",
+                            help="쟁점 조문 화이트리스트 파일 경로 (줄마다 쟁점 키워드 검색어, #으로 시작하면 주석)")
     p_rulings.add_argument("--max-pages", type=int, default=10)
 
     p_eval = sub.add_parser("eval-citations", help="resolve_citation 파서 정확도(precision/recall) 측정")
@@ -84,7 +86,15 @@ def main() -> None:
     elif args.command == "build-diffs":
         asyncio.run(commands.build_diffs(args.laws, settings))
     elif args.command == "ingest-rulings":
-        asyncio.run(commands.ingest_rulings(args.target, args.queries, settings, max_pages=args.max_pages))
+        queries = list(args.queries or [])
+        if args.article_whitelist:
+            with open(args.article_whitelist, encoding="utf-8") as f:
+                queries.extend(
+                    line.strip() for line in f if line.strip() and not line.strip().startswith("#")
+                )
+        if not queries:
+            raise SystemExit("--query 또는 --article 중 하나는 필요합니다.")
+        asyncio.run(commands.ingest_rulings(args.target, queries, settings, max_pages=args.max_pages))
     elif args.command == "eval-citations":
         asyncio.run(commands.eval_citations(args.golden, settings))
     elif args.command == "build-graph":
