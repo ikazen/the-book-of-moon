@@ -176,3 +176,34 @@ async def find_unpatched(since: date) -> list[UnpatchedCandidate]:
         )
         for r in records
     ]
+
+
+async def materialize_unpatched(since: date) -> int:
+    """find_unpatched의 결과를 loophole_candidate 행으로 굳힌다.
+
+    status='alive'로 고정한다 — find_unpatched 자체가 "현재 버전이 그대로 유효한" 경우만
+    돌려주므로 patched/partial/pending은 이 경로로 나올 수 없다(그건 다른 탐지 질의가
+    필요하다 — 미구현, 향후 과제). pattern_type/claim_deadline은 세무사 검증(confirmed_by)
+    전까지 비워둔다 — 자동 분류는 이 저장소가 피하는 LLM 판단 영역과 맞닿아 있다.
+    risk_score는 anti_avoidance_rate로 근사한다(이 조문이 다른 사건에서 실질과세 등으로
+    얼마나 자주 걸렸는지 — 높을수록 이 승소도 재도전받을 여지가 크다는 신호).
+    """
+    from lawcorpus.risk import anti_avoidance_rate
+
+    candidates = await find_unpatched(since)
+    pool = get_pool()
+    inserted = 0
+    async with pool.acquire() as conn:
+        for candidate in candidates:
+            risk_score = await anti_avoidance_rate(candidate.article_id)
+            result = await conn.execute(
+                """
+                INSERT INTO loophole_candidate (article_id, origin_ruling, status, risk_score)
+                VALUES ($1, $2, 'alive', $3)
+                ON CONFLICT (article_id, origin_ruling) DO NOTHING
+                """,
+                candidate.article_id, candidate.ruling_id, round(risk_score, 3),
+            )
+            if result == "INSERT 0 1":
+                inserted += 1
+    return inserted
