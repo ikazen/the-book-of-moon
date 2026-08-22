@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS loophole_candidate (
     claim_deadline  date,
     risk_score      numeric(4,3),
     confirmed_by    text,
-    note            text
+    note            text,
+    UNIQUE (article_id, origin_ruling)
 );
 CREATE INDEX IF NOT EXISTS loophole_candidate_status_idx  ON loophole_candidate (status, claim_deadline);
 CREATE INDEX IF NOT EXISTS loophole_candidate_article_idx ON loophole_candidate (article_id);

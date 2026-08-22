@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import date
 
 from lawcorpus import commands
 from lawcorpus.config import get_settings
+from lawcorpus.db.neo4j import close_neo4j, init_neo4j
+from lawcorpus.db.pg import close_pg, init_pg
 from lawcorpus.graph.build import build_graph
 from lawcorpus.schema.apply import apply_schema
+
+
+async def _run_find_unpatched(since_str: str, settings) -> None:
+    from lawcorpus.graph_queries import materialize_unpatched
+
+    await init_pg(settings.pg_dsn)
+    await init_neo4j(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
+    try:
+        inserted = await materialize_unpatched(date.fromisoformat(since_str))
+        print(f"완료. loophole_candidate 신규 {inserted}건")
+    finally:
+        await close_pg()
+        await close_neo4j()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,6 +60,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_rewrite = sub.add_parser("load-rewrite-map", help="전부개정 조문번호 수작업 매핑 CSV 적재")
     p_rewrite.add_argument("--csv", required=True, help="rewrite_map.csv 경로")
+
+    p_unpatched = sub.add_parser("find-unpatched", help="미개정 생존 구멍 탐지 → loophole_candidate 적재")
+    p_unpatched.add_argument("--since", required=True, help="YYYY-MM-DD 이후 판결만 대상")
 
     p_cases = sub.add_parser("ingest-cases", help="법제처 OPEN API에서 판례 수집 (참조조문 스코프 필터)")
     p_cases.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
@@ -85,6 +104,8 @@ def main() -> None:
         asyncio.run(build_graph(settings))
     elif args.command == "load-rewrite-map":
         asyncio.run(commands.load_rewrite_map(args.csv, settings))
+    elif args.command == "find-unpatched":
+        asyncio.run(_run_find_unpatched(args.since, settings))
     elif args.command == "ingest-cases":
         asyncio.run(commands.ingest_cases(args.queries, settings, max_pages=args.max_pages))
     elif args.command == "backfill":
