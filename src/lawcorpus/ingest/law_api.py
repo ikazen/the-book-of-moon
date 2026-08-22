@@ -36,6 +36,7 @@ from lawcorpus.ingest.models import (
     RawLawListItem,
     RawSubClause,
 )
+from lawcorpus.storage.raw_store import put_raw
 
 _RATE_LIMIT_SLEEP = 0.5   # 요청 간 최소 대기(초)
 _MAX_RETRIES = 3
@@ -49,7 +50,8 @@ def _txt(elem: ET.Element | None, default: str = "") -> str:
     return elem.text.strip()
 
 
-async def _get_xml(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> ET.Element:
+async def _get_xml_raw(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> tuple[ET.Element, bytes]:
+    """파싱된 root와 원본 bytes를 함께 반환한다 — 원본 오브젝트 스토리지 보관용(결정 L)."""
     last_exc: Exception | None = None
     for attempt in range(_MAX_RETRIES):
         try:
@@ -57,7 +59,7 @@ async def _get_xml(client: httpx.AsyncClient, url: str, params: dict[str, Any]) 
             resp.raise_for_status()
             await asyncio.sleep(_RATE_LIMIT_SLEEP)
             try:
-                return ET.fromstring(resp.content)
+                return ET.fromstring(resp.content), resp.content
             except ET.ParseError as exc:
                 # 점검 중인 API가 HTML "시스템 점검" 페이지를 200으로 돌려주는 경우가 있다 —
                 # 응답 앞부분을 남겨야 원인 파악이 된다.
@@ -67,6 +69,11 @@ async def _get_xml(client: httpx.AsyncClient, url: str, params: dict[str, Any]) 
             last_exc = exc
             await asyncio.sleep(2 ** attempt)
     raise RuntimeError(f"API 요청 실패 ({url}): {last_exc}")
+
+
+async def _get_xml(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> ET.Element:
+    root, _raw = await _get_xml_raw(client, url, params)
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -296,14 +303,15 @@ def parse_eflaw_xml(root: ET.Element) -> RawEfLaw:
 
 async def fetch_eflaw(mst: str, settings) -> RawEfLaw:
     async with httpx.AsyncClient() as client:
-        root = await _get_xml(
+        root, raw = await _get_xml_raw(
             client,
             f"{settings.law_api_base_url}/lawService.do",
             {"OC": settings.law_api_oc, "target": "eflaw", "type": "XML", "MST": mst},
         )
     ef_law = parse_eflaw_xml(root)
+    raw_uri = await put_raw(settings, f"eflaw/{mst}.xml", raw)
     # eflaw 상세 응답의 <기본정보>에는 법령일련번호(MST) 태그 자체가 없다 — 요청 인자로 채운다
-    return replace(ef_law, mst=mst)
+    return replace(ef_law, mst=mst, raw_uri=raw_uri)
 
 
 # ---------------------------------------------------------------------------

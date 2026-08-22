@@ -11,6 +11,7 @@ import asyncpg
 from neo4j import AsyncGraphDatabase
 from pgvector.asyncpg import register_vector
 
+from lawcorpus.ingest.addendum_parser import parse_addendum
 from lawcorpus.ingest.case_mapper import MappedCase, map_case
 from lawcorpus.ingest.law_api import (
     fetch_case,
@@ -269,6 +270,59 @@ async def ingest_statutes(laws: list[str], settings, *, include_subordinate: boo
 
         total = await conn.fetchval("SELECT count(*) FROM article_version")
         print(f"\n완료. article_version 전체: {total}행")
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# ingest-addenda
+# ---------------------------------------------------------------------------
+
+async def _insert_addendum_items(conn: asyncpg.Connection, statute_id: int, ef_law) -> int:
+    inserted = 0
+    async with conn.transaction():
+        for unit in ef_law.addenda:
+            for item in parse_addendum(unit):
+                result = await conn.execute(
+                    """
+                    INSERT INTO addendum
+                        (statute_id, promulgation_no, clause_no, body, kind, applies_from, target_articles)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (statute_id, promulgation_no, clause_no) DO NOTHING
+                    """,
+                    statute_id, item.promulgation_no, item.clause_no, item.body,
+                    item.kind, item.applies_from, [],
+                )
+                if result == "INSERT 0 1":
+                    inserted += 1
+    return inserted
+
+
+async def ingest_addenda(laws: list[str], settings) -> None:
+    """이미 ingest_statutes로 적재된 법령의 현행 스냅샷에서 부칙만 추가로 파싱해 적재한다.
+    target_articles(조문 인용)는 아직 채우지 않는다 — resolve_citation(#30) 완료 후 별도 백필."""
+    if not settings.law_api_oc:
+        raise SystemExit("LAWCORPUS_LAW_API_OC가 설정되지 않았습니다.")
+
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    try:
+        for law_name in laws:
+            try:
+                items = await list_eflaws(law_name, settings)
+                current = next((i for i in items if i.is_current), None)
+                if current is None:
+                    print(f"[{law_name}] 현행 스냅샷을 찾지 못함, 건너뜀")
+                    continue
+
+                ef_law = await fetch_eflaw(current.mst, settings)
+                statute_id = int(ef_law.law_id)
+                inserted = await _insert_addendum_items(conn, statute_id, ef_law)
+                print(f"[{law_name}] 부칙 {len(ef_law.addenda)}단위 처리, 항목 신규 {inserted}건")
+            except Exception as exc:
+                print(f"[{law_name}] 오류: {exc}")
+
+        total = await conn.fetchval("SELECT count(*) FROM addendum")
+        print(f"\n완료. addendum 전체: {total}행")
     finally:
         await conn.close()
 

@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS addendum (
     body            text NOT NULL,
     kind            text,        -- 시행일/적용례/경과조치/특례
     applies_from    date,
-    target_articles bigint[]     -- article_id[]
+    target_articles bigint[],    -- article_id[] (resolve_citation 연결 전까지 빈 배열)
+    UNIQUE (statute_id, promulgation_no, clause_no)
 );
 
 -- 쟁송 + 해석 통합 (prec/expc/detc/admrul 공통)
