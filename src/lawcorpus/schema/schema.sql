@@ -47,9 +47,11 @@ CREATE TABLE IF NOT EXISTS article_version (
     promulgation_no   int,
     revision_type     text,                       -- 제정/일부개정/전부개정
     is_full_rewrite   boolean NOT NULL DEFAULT false,
+    revision_reason   text,        -- 제개정이유내용(법제처 제공) — article_diff.reason_text 소스
     ingested_at       timestamptz NOT NULL DEFAULT now(),
     UNIQUE (article_id, valid_from)
 );
+ALTER TABLE article_version ADD COLUMN IF NOT EXISTS revision_reason text;
 COMMENT ON COLUMN article_version.valid_to IS
     'exclusive 상한: 다음 버전의 valid_from과 동일한 값이어야 한다. NULL = 현재 유효.';
 

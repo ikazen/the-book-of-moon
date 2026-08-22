@@ -39,6 +39,7 @@ class MappedArticleVersion:
     promulgation_no: int | None
     revision_type: str
     is_full_rewrite: bool
+    revision_reason: str
     moleg_article_key: str
 
 
@@ -85,6 +86,7 @@ def map_eflaw(ef_law: RawEfLaw) -> MappedStatute:
                 promulgation_no=promulgation_no,
                 revision_type=unit.revision_type,
                 is_full_rewrite=unit.revision_type == "전부개정",
+                revision_reason=ef_law.revision_reason,
                 moleg_article_key=f"{ef_law.mst}:{unit.jomun_key}",
             )
         )
