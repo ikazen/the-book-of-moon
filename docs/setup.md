@@ -48,10 +48,13 @@ lawcorpus ingest-addenda --law 국세기본법
 lawcorpus build-diffs --law 국세기본법
 
 # 4. 판례/법령해석례/헌재결정례/행정규칙 수집
-lawcorpus ingest-rulings --target prec --query 국세기본법 --query 실질과세
-lawcorpus ingest-rulings --target expc --query 국세기본법
-lawcorpus ingest-rulings --target detc --query 국세기본법
-lawcorpus ingest-rulings --target admrul --query 국세청
+lawcorpus ingest-rulings --target prec --article data/article_whitelist.txt
+lawcorpus ingest-rulings --target expc --article data/article_whitelist.txt
+lawcorpus ingest-rulings --target detc --article data/article_whitelist.txt
+lawcorpus ingest-rulings --target admrul --article data/article_whitelist.txt
+
+# --query로 직접 검색어를 줄 수도 있다(둘 다 지정하면 합쳐진다)
+lawcorpus ingest-rulings --target prec --query 실질과세
 
 # 5. Neo4j 그래프 재생성 (PG를 SoT로 전량 재생성)
 lawcorpus build-graph
@@ -59,6 +62,10 @@ lawcorpus build-graph
 # 6. 미개정 생존 구멍 탐지 → loophole_candidate 적재
 lawcorpus find-unpatched --since 2020-01-01
 ```
+
+`--article` 파일의 각 줄은 조문 인용 문자열("국세기본법 제14조")이 아니라 그 조문이 실제로
+다투어지는 쟁점 키워드("실질과세")다 — 법원 판례 검색은 제목/키워드 매칭이라 인용 문자열
+자체는 거의 매칭되지 않는다(실측 확인). `#`으로 시작하는 줄은 주석으로 무시된다.
 
 법령/검색어는 소비처마다 다를 수 있어 CLI 인자로 받는다. 전부개정으로 조문번호가 갈아엎어진
 경우의 수작업 매핑은:
