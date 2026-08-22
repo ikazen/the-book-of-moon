@@ -65,6 +65,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_unpatched = sub.add_parser("find-unpatched", help="미개정 생존 구멍 탐지 → loophole_candidate 적재")
     p_unpatched.add_argument("--since", required=True, help="YYYY-MM-DD 이후 판결만 대상")
 
+    p_embed = sub.add_parser("embed-backfill", help="현행 조문 버전을 항 단위로 청킹해 임베딩 백필")
+    p_embed.add_argument("--batch-size", type=int, default=64)
+
     return parser
 
 
@@ -103,6 +106,8 @@ def main() -> None:
         asyncio.run(commands.load_rewrite_map(args.csv, settings))
     elif args.command == "find-unpatched":
         asyncio.run(_run_find_unpatched(args.since, settings))
+    elif args.command == "embed-backfill":
+        asyncio.run(commands.embed_backfill(settings, batch_size=args.batch_size))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import json
 from datetime import date
 
 import asyncpg
+from pgvector.asyncpg import register_vector
 
 from lawcorpus.ingest.addendum_parser import parse_addendum
 from lawcorpus.ingest.diff import added_thresholds, diff_trees
@@ -20,7 +21,9 @@ from lawcorpus.ingest.law_api import (
     list_rulings,
 )
 from lawcorpus.ingest.statute_mapper import MappedStatute, map_eflaw
+from lawcorpus.ingest.tree import iter_chunks
 from lawcorpus.resolution import _known_law_names, parse_citation
+from lawcorpus.retrieval.embedder import embed_batch
 
 
 # ---------------------------------------------------------------------------
@@ -531,5 +534,58 @@ async def load_rewrite_map(csv_path: str, settings) -> None:
                 if result == "INSERT 0 1":
                     inserted += 1
         print(f"완료. 신규 {inserted}건, 실패 {skipped}건")
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# embed-backfill
+# ---------------------------------------------------------------------------
+
+async def embed_backfill(settings, *, batch_size: int = 64) -> None:
+    """현행(valid_to IS NULL) article_version만 항 단위로 청킹해 임베딩한다(결정 P) —
+    과거 버전은 HNSW 인덱스에도 안 들어가 임베딩해도 검색에 안 쓰인다. 과거 시점 의미검색
+    수요가 확인되면 그때 범위를 넓힌다."""
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    await register_vector(conn)
+    try:
+        # 재실행 시 그사이 개정으로 더 이상 현행이 아니게 된 청크의 is_current를 내린다 —
+        # 안 그러면 HNSW 부분 인덱스(WHERE is_current)에 낡은 버전이 계속 남는다.
+        await conn.execute(
+            """
+            UPDATE article_embedding ae SET is_current = false
+            FROM article_version av
+            WHERE ae.article_key = av.article_key AND av.valid_to IS NOT NULL AND ae.is_current
+            """
+        )
+
+        rows = await conn.fetch("SELECT article_key, tree FROM article_version WHERE valid_to IS NULL")
+        chunks: list[tuple[int, str, str]] = []
+        for row in rows:
+            tree = json.loads(row["tree"]) if isinstance(row["tree"], str) else row["tree"]
+            for chunk_path, chunk_text in iter_chunks(tree):
+                chunks.append((row["article_key"], chunk_path, chunk_text))
+
+        print(f"청크 {len(chunks)}건 생성(조문버전 {len(rows)}건 대상), 임베딩 시작...")
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            vectors = await embed_batch([c[2] for c in batch], settings)
+            records = [
+                (article_key, chunk_path, chunk_text, vector, True)
+                for (article_key, chunk_path, chunk_text), vector in zip(batch, vectors)
+            ]
+            await conn.executemany(
+                """
+                INSERT INTO article_embedding (article_key, chunk_path, chunk_text, embedding, is_current)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (article_key, chunk_path) DO UPDATE SET
+                    chunk_text = EXCLUDED.chunk_text, embedding = EXCLUDED.embedding, is_current = EXCLUDED.is_current
+                """,
+                records,
+            )
+            print(f"  {min(i + batch_size, len(chunks))}/{len(chunks)} 처리")
+
+        null_count = await conn.fetchval("SELECT count(*) FROM article_embedding WHERE embedding IS NULL")
+        print(f"완료. article_embedding NULL embedding {null_count}건")
     finally:
         await conn.close()
