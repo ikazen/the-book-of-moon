@@ -22,42 +22,76 @@ _MANAGED_LABELS = (
     "Statute", "Article", "Version", "Addendum", "Ruling",
     "Term", "Doctrine", "Pattern", "Loophole",
 )
+_BATCH_SIZE = 2000
+# Neo4j 인스턴스 힙이 1.5GB(트랜잭션 풀 상한 ~1.03GiB)로 작고 pot-of-greed-api와 공유 중이다
+# (실측 — infra-lookup, 2026-08-22). 실제 원인은 배치 크기가 아니라 session.run() 결과를
+# consume()하지 않아 auto-commit 트랜잭션이 서버 쪽에서 완전히 끝나지 않은 채 다음 배치로
+# 넘어가 트랜잭션 메모리가 회수되지 않고 쌓인 것 — consume() 추가로 해결, 배치 크기는 보수적으로만 낮춘다.
+
+
+async def _run_batched(session, query: str, rows: list[dict], batch_size: int = _BATCH_SIZE) -> None:
+    """UNWIND 배치로 왕복 횟수를 줄인다 — 행 1건당 session.run() 1회 왕복이면 이력이 깊은
+    법령(수십만 Version)에서 그래프 재생성 자체가 수 시간씩 걸린다(the-book-of-moon #45 —
+    close_versions/build_diffs와 같은 계열의 성능 버그, 실측으로 발견).
+
+    각 결과를 반드시 consume()한다 — 안 그러면 auto-commit 트랜잭션이 서버 쪽에서 완전히
+    끝나지 않은 채로 다음 session.run()이 이어져 트랜잭션 메모리 풀이 회수되지 않고 쌓인다
+    (실측 — 같은 세션 안에서 wipe 다음에 이어지는 배치가 매번 MemoryPoolOutOfMemoryError로
+    실패했는데, 완전히 독립된 세션으로 나눠 실행하면 각각은 성공했다)."""
+    for i in range(0, len(rows), batch_size):
+        result = await session.run(query, batch=rows[i:i + batch_size])
+        await result.consume()
 
 
 async def _wipe_managed_labels(session) -> None:
+    """레이블 전체를 통째로 DETACH DELETE하면(30만+ 노드) 트랜잭션 메모리 한도(힙 1.5GB
+    인스턴스에서 ~1GiB)를 넘겨 MemoryPoolOutOfMemoryError가 난다(실측) — LIMIT 배치로
+    나눠서 반복 삭제한다."""
     label_match = " OR ".join(f"n:{label}" for label in _MANAGED_LABELS)
-    await session.run(f"MATCH (n) WHERE {label_match} DETACH DELETE n")
+    while True:
+        result = await session.run(
+            f"MATCH (n) WHERE {label_match} WITH n LIMIT {_BATCH_SIZE} DETACH DELETE n RETURN count(n) AS deleted"
+        )
+        record = await result.single()
+        await result.consume()
+        if record["deleted"] == 0:
+            break
 
 
 async def _build_statutes(pg_conn: asyncpg.Connection, session) -> list[dict]:
     rows = await pg_conn.fetch("SELECT statute_id, name, law_type, parent_id, current_mst, enforced_on FROM statute")
-    for row in rows:
-        await session.run(
-            "MERGE (s:Statute {statute_id: $id}) SET s.name = $name, s.law_type = $law_type",
-            id=row["statute_id"], name=row["name"], law_type=row["law_type"],
-        )
-    for row in rows:
-        if row["parent_id"] is not None:
-            await session.run(
-                """
-                MATCH (child:Statute {statute_id: $cid}), (parent:Statute {statute_id: $pid})
-                MERGE (child)-[:DELEGATES_TO]->(parent)
-                """,
-                cid=row["statute_id"], pid=row["parent_id"],
-            )
+    await _run_batched(
+        session,
+        "UNWIND $batch AS row MERGE (s:Statute {statute_id: row.id}) SET s.name = row.name, s.law_type = row.law_type",
+        [{"id": r["statute_id"], "name": r["name"], "law_type": r["law_type"]} for r in rows],
+    )
+    parents = [{"cid": r["statute_id"], "pid": r["parent_id"]} for r in rows if r["parent_id"] is not None]
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MATCH (child:Statute {statute_id: row.cid}), (parent:Statute {statute_id: row.pid})
+        MERGE (child)-[:DELEGATES_TO]->(parent)
+        """,
+        parents,
+    )
     return [dict(r) for r in rows]
 
 
 async def _build_articles(pg_conn: asyncpg.Connection, session) -> list[dict]:
     rows = await pg_conn.fetch("SELECT article_id, statute_id, art_no, art_branch_no FROM article")
-    for row in rows:
-        await session.run(
-            """
-            MERGE (a:Article {article_id: $id})
-            SET a.statute_id = $sid, a.art_no = $art_no, a.branch_no = $branch_no
-            """,
-            id=row["article_id"], sid=row["statute_id"], art_no=row["art_no"], branch_no=row["art_branch_no"],
-        )
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MERGE (a:Article {article_id: row.id})
+        SET a.statute_id = row.sid, a.art_no = row.art_no, a.branch_no = row.branch_no
+        """,
+        [
+            {"id": r["article_id"], "sid": r["statute_id"], "art_no": r["art_no"], "branch_no": r["art_branch_no"]}
+            for r in rows
+        ],
+    )
     return [dict(r) for r in rows]
 
 
@@ -66,31 +100,49 @@ async def _build_versions(pg_conn: asyncpg.Connection, session) -> None:
         "SELECT article_key, article_id, valid_from, valid_to, title "
         "FROM article_version ORDER BY article_id, valid_from"
     )
+
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MERGE (v:Version {article_key: row.key})
+        SET v.valid_from = row.valid_from, v.valid_to = row.valid_to, v.title = row.title
+        """,
+        [
+            {
+                "key": r["article_key"], "valid_from": str(r["valid_from"]),
+                "valid_to": str(r["valid_to"]) if r["valid_to"] else None, "title": r["title"],
+            }
+            for r in rows
+        ],
+    )
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MATCH (a:Article {article_id: row.aid}), (v:Version {article_key: row.key})
+        MERGE (a)-[:HAS_VERSION]->(v)
+        """,
+        [{"aid": r["article_id"], "key": r["article_key"]} for r in rows],
+    )
+
     previous_key: dict[int, int] = {}
+    supersedes: list[dict] = []
     for row in rows:
-        await session.run(
-            """
-            MERGE (v:Version {article_key: $key})
-            SET v.valid_from = $valid_from, v.valid_to = $valid_to, v.title = $title
-            """,
-            key=row["article_key"],
-            valid_from=str(row["valid_from"]),
-            valid_to=str(row["valid_to"]) if row["valid_to"] else None,
-            title=row["title"],
-        )
-        await session.run(
-            "MATCH (a:Article {article_id: $aid}), (v:Version {article_key: $key}) MERGE (a)-[:HAS_VERSION]->(v)",
-            aid=row["article_id"], key=row["article_key"],
-        )
         prior = previous_key.get(row["article_id"])
         if prior is not None:
             # newer 버전이 older 버전을 SUPERSEDES(대체)한다
-            await session.run(
-                "MATCH (older:Version {article_key: $prior}), (newer:Version {article_key: $key}) "
-                "MERGE (newer)-[:SUPERSEDES]->(older)",
-                prior=prior, key=row["article_key"],
-            )
+            supersedes.append({"prior": prior, "key": row["article_key"]})
         previous_key[row["article_id"]] = row["article_key"]
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MATCH (older:Version {article_key: row.prior}), (newer:Version {article_key: row.key})
+        MERGE (newer)-[:SUPERSEDES]->(older)
+        """,
+        supersedes,
+    )
 
 
 async def _build_delegation_edges(
@@ -123,7 +175,7 @@ async def _build_delegation_edges(
             if target_id is None:
                 continue
 
-            await session.run(
+            result = await session.run(
                 f"""
                 MATCH (src:Article {{article_id: $sid}}), (dst:Article {{article_id: $did}})
                 MERGE (src)-[r:{edge.edge_type}]->(dst)
@@ -131,6 +183,7 @@ async def _build_delegation_edges(
                 """,
                 sid=source_id, did=target_id, valid_from=valid_from,
             )
+            await result.consume()
             edge_count += 1
     return edge_count
 
@@ -157,11 +210,12 @@ async def _build_defines_edges(pg_conn: asyncpg.Connection, session) -> int:
         tree = json.loads(row["tree"]) if isinstance(row["tree"], str) else row["tree"]
         full_text = row["body"] + "\n" + _tree_full_text(tree)
         for term in extract_defines(full_text):
-            await session.run(
+            result = await session.run(
                 "MERGE (t:Term {name: $term}) "
                 "WITH t MATCH (a:Article {article_id: $aid}) MERGE (a)-[:DEFINES]->(t)",
                 term=term, aid=row["article_id"],
             )
+            await result.consume()
             edge_count += 1
     return edge_count
 
@@ -169,10 +223,11 @@ async def _build_defines_edges(pg_conn: asyncpg.Connection, session) -> int:
 async def _build_patterns(pg_conn: asyncpg.Connection, session) -> None:
     rows = await pg_conn.fetch("SELECT code, description FROM pattern_type")
     for row in rows:
-        await session.run(
+        result = await session.run(
             "MERGE (p:Pattern {pattern_type: $code}) SET p.description = $desc",
             code=row["code"], desc=row["description"],
         )
+        await result.consume()
 
 
 async def _build_rulings(pg_conn: asyncpg.Connection, session) -> int:
@@ -183,21 +238,35 @@ async def _build_rulings(pg_conn: asyncpg.Connection, session) -> int:
     rows = await pg_conn.fetch(
         "SELECT ruling_id, source, case_no, decided_on, outcome, cited_article_ids FROM ruling"
     )
-    for row in rows:
-        await session.run(
-            """
-            MERGE (r:Ruling {ruling_id: $id})
-            SET r.source = $source, r.case_no = $case_no,
-                r.decided_on = $decided_on, r.outcome = $outcome
-            """,
-            id=row["ruling_id"], source=row["source"], case_no=row["case_no"],
-            decided_on=str(row["decided_on"]), outcome=row["outcome"],
-        )
-        for article_id in row["cited_article_ids"] or []:
-            await session.run(
-                "MATCH (r:Ruling {ruling_id: $rid}), (a:Article {article_id: $aid}) MERGE (r)-[:CITES]->(a)",
-                rid=row["ruling_id"], aid=article_id,
-            )
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MERGE (r:Ruling {ruling_id: row.id})
+        SET r.source = row.source, r.case_no = row.case_no,
+            r.decided_on = row.decided_on, r.outcome = row.outcome
+        """,
+        [
+            {
+                "id": r["ruling_id"], "source": r["source"], "case_no": r["case_no"],
+                "decided_on": str(r["decided_on"]), "outcome": r["outcome"],
+            }
+            for r in rows
+        ],
+    )
+    cites = [
+        {"rid": r["ruling_id"], "aid": aid}
+        for r in rows for aid in (r["cited_article_ids"] or [])
+    ]
+    await _run_batched(
+        session,
+        """
+        UNWIND $batch AS row
+        MATCH (r:Ruling {ruling_id: row.rid}), (a:Article {article_id: row.aid})
+        MERGE (r)-[:CITES]->(a)
+        """,
+        cites,
+    )
     return len(rows)
 
 

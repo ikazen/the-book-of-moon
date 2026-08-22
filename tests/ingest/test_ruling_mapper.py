@@ -96,6 +96,59 @@ def test_classify_prec_outcome_taxpayer_win():
     assert mapped.outcome == "납세자승"
 
 
+def test_classify_prec_outcome_taxpayer_win_first_instance_topic_marker():
+    """실측(대법원 2020구합58847): '청구를' 대신 '청구는'+중간 수식어가 낀 실제 문구."""
+    raw = RawRuling(
+        ruling_id="x", source="서울행정법원", case_no="2020구합58847", decided_at="20200101",
+        title="", gist="", body="그렇다면 원고의 이 사건 청구는 이유 있으므로 이를 인용하기로 하여,주문과 같이 판결한다.",
+    )
+    mapped = map_ruling(raw)
+    assert mapped.outcome == "납세자승"
+
+
+def test_classify_prec_outcome_supreme_court_dismiss_plaintiff_appellant():
+    """실측(대법원 2024두65119): 원고(납세자)가 상고했고 기각됐다 — 원심(패소) 유지, 납세자패."""
+    raw = RawRuling(
+        ruling_id="x", source="대법원", case_no="2024두65119", decided_at="20200101",
+        title="", gist="", body="상고를 모두 기각한다.\n상고비용은 원고들이 부담한다.",
+    )
+    mapped = map_ruling(raw)
+    assert mapped.outcome == "납세자패"
+
+
+def test_classify_prec_outcome_supreme_court_remand_defendant_argument_accepted():
+    """실측(대법원 2023두37896): 피고(과세관청)의 상고이유가 받아들여져 파기환송 — 납세자패."""
+    raw = RawRuling(
+        ruling_id="x", source="대법원", case_no="2023두37896", decided_at="20200101",
+        title="", gist="",
+        body="이를 지적하는 피고의 상고이유 주장은 이유 있다. 원심판결을 파기하고, 사건을 원심법원에 환송한다.",
+    )
+    mapped = map_ruling(raw)
+    assert mapped.outcome == "납세자패"
+
+
+def test_classify_prec_outcome_mixed_remand_and_dismiss_is_none():
+    """실측(대법원 97누4661): 일부는 파기환송, 나머지는 기각 — 혼합 결과라 안전하게 None."""
+    raw = RawRuling(
+        ruling_id="x", source="대법원", case_no="97누4661", decided_at="20200101",
+        title="", gist="",
+        body="원심판결 중 가산세 부과처분에 관한 원고들 패소 부분을 파기하고 이 부분 사건을 다시 "
+             "심리·판단하도록 하기 위하여 원심법원에 환송하기로 하며,원고들의 나머지 상고는 이를 기각하기로 한다.",
+    )
+    mapped = map_ruling(raw)
+    assert mapped.outcome is None
+
+
+def test_classify_prec_outcome_appellate_dismiss_names_party_directly():
+    """실측(서울고등법원 2023누16451): 상고비용 문구 없이 '원고의 항소를 기각한다'만 있는 경우."""
+    raw = RawRuling(
+        ruling_id="x", source="서울고등법원", case_no="2023누16451", decided_at="20200101",
+        title="", gist="", body="제1심 판결은 정당하므로 원고의 항소를 기각한다.",
+    )
+    mapped = map_ruling(raw)
+    assert mapped.outcome == "납세자패"
+
+
 def test_classify_prec_outcome_taxpayer_lose():
     raw = RawRuling(
         ruling_id="x", source="대법원", case_no="2020두1", decided_at="20200101",
