@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from lawcorpus.resolution import _require_as_of, get_article, get_effective_law, parse_citation, resolve_citation
+from lawcorpus.resolution import require_as_of, get_article, get_effective_law, parse_citation, resolve_citation
 
 _LAW_NAMES = [
     "국세기본법", "국세기본법 시행령", "소득세법", "법인세법", "부가가치세법",
@@ -13,21 +13,21 @@ _LAW_NAMES = [
 ]
 
 
-# --- _require_as_of ---
+# --- require_as_of ---
 
-def test_require_as_of_accepts_date():
+def testrequire_as_of_accepts_date():
     d = date(2020, 1, 1)
-    assert _require_as_of(d) is d
+    assert require_as_of(d) is d
 
 
-def test_require_as_of_rejects_none():
+def testrequire_as_of_rejects_none():
     with pytest.raises(TypeError):
-        _require_as_of(None)
+        require_as_of(None)
 
 
-def test_require_as_of_rejects_string():
+def testrequire_as_of_rejects_string():
     with pytest.raises(TypeError):
-        _require_as_of("2020-01-01")
+        require_as_of("2020-01-01")
 
 
 # --- parse_citation ---

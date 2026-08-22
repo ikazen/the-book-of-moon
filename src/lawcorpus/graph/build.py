@@ -10,6 +10,8 @@ DELEGATES/REFERS_TO/MUTATIS 엣지는 아직 PG에 저장돼 있지 않아(#31�
 
 from __future__ import annotations
 
+import json
+
 import asyncpg
 from neo4j import AsyncGraphDatabase
 
@@ -133,14 +135,28 @@ async def _build_delegation_edges(
     return edge_count
 
 
+def _tree_full_text(tree: dict) -> str:
+    """정의 표현("...란 ...을 말한다")은 조문 자체(body)가 아니라 항/호/목 안에 있는 경우가
+    대부분이다 — body만 스캔하면 놓친다(실측으로 발견)."""
+    parts = []
+    for clause in tree.get("clauses", []):
+        parts.append(clause["text"])
+        for sub in clause["sub_clauses"]:
+            parts.append(sub["text"])
+            parts.extend(item["text"] for item in sub["items"])
+    return "\n".join(parts)
+
+
 async def _build_defines_edges(pg_conn: asyncpg.Connection, session) -> int:
     rows = await pg_conn.fetch(
-        "SELECT DISTINCT ON (article_id) article_id, body FROM article_version "
+        "SELECT DISTINCT ON (article_id) article_id, body, tree FROM article_version "
         "WHERE valid_to IS NULL ORDER BY article_id, valid_from DESC"
     )
     edge_count = 0
     for row in rows:
-        for term in extract_defines(row["body"]):
+        tree = json.loads(row["tree"]) if isinstance(row["tree"], str) else row["tree"]
+        full_text = row["body"] + "\n" + _tree_full_text(tree)
+        for term in extract_defines(full_text):
             await session.run(
                 "MERGE (t:Term {name: $term}) "
                 "WITH t MATCH (a:Article {article_id: $aid}) MERGE (a)-[:DEFINES]->(t)",
@@ -157,6 +173,32 @@ async def _build_patterns(pg_conn: asyncpg.Connection, session) -> None:
             "MERGE (p:Pattern {pattern_type: $code}) SET p.description = $desc",
             code=row["code"], desc=row["description"],
         )
+
+
+async def _build_rulings(pg_conn: asyncpg.Connection, session) -> int:
+    """Ruling 노드 + CITES 엣지. cited_article_ids는 resolve_citation 백필 전까지 비어있어
+    당장은 CITES가 거의 안 생기지만, 백필이 채워지는 즉시 다음 build-graph 재실행에서
+    자동으로 반영되도록 배선은 지금 완성해둔다(#34가 get_risk_neighbors/find_unpatched로
+    이 CITES 엣지를 바로 소비한다)."""
+    rows = await pg_conn.fetch(
+        "SELECT ruling_id, source, case_no, decided_on, outcome, cited_article_ids FROM ruling"
+    )
+    for row in rows:
+        await session.run(
+            """
+            MERGE (r:Ruling {ruling_id: $id})
+            SET r.source = $source, r.case_no = $case_no,
+                r.decided_on = $decided_on, r.outcome = $outcome
+            """,
+            id=row["ruling_id"], source=row["source"], case_no=row["case_no"],
+            decided_on=str(row["decided_on"]), outcome=row["outcome"],
+        )
+        for article_id in row["cited_article_ids"] or []:
+            await session.run(
+                "MATCH (r:Ruling {ruling_id: $rid}), (a:Article {article_id: $aid}) MERGE (r)-[:CITES]->(a)",
+                rid=row["ruling_id"], aid=article_id,
+            )
+    return len(rows)
 
 
 async def build_graph(settings) -> None:
@@ -184,6 +226,9 @@ async def build_graph(settings) -> None:
 
             await _build_patterns(pg_conn, session)
             print("Pattern 재생성 완료")
+
+            ruling_count = await _build_rulings(pg_conn, session)
+            print(f"Ruling {ruling_count}건")
     finally:
         await pg_conn.close()
         await driver.close()
