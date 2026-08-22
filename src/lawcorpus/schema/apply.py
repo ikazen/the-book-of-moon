@@ -25,9 +25,10 @@ async def apply_pg_schema(dsn: str, *, drop: bool = False) -> None:
 
 
 async def _run_cypher_script(session, script: str) -> None:
-    for stmt in script.split(";"):
+    lines = [line for line in script.splitlines() if not line.strip().startswith("//")]
+    for stmt in "\n".join(lines).split(";"):
         stmt = stmt.strip()
-        if stmt and not stmt.startswith("//"):
+        if stmt:
             await session.run(stmt)
 
 
