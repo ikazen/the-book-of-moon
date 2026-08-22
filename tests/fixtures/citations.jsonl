@@ -1,0 +1,20 @@
+{"text": "소득세법 제89조에 따르면 1세대1주택은 비과세된다.", "expected": {"law": "소득세법", "art_no": 89, "branch_no": 0}}
+{"text": "법인세법 제18조의3에 따르면 수입배당금은 익금불산입된다.", "expected": {"law": "법인세법", "art_no": 18, "branch_no": 3}}
+{"text": "국세기본법 제14조 제2항에서 정하는 실질과세 원칙", "expected": {"law": "국세기본법", "art_no": 14, "branch_no": 0}}
+{"text": "국세기본법 시행령 제2조에 따른 특수관계인의 범위", "expected": {"law": "국세기본법 시행령", "art_no": 2, "branch_no": 0}}
+{"text": "상속세 및 증여세법 제16조제2항에 따른 공익법인 요건", "expected": {"law": "상속세 및 증여세법", "art_no": 16, "branch_no": 0}}
+{"text": "상속세 및 증여세법 시행령 제38조제4항에 따른 운용기간", "expected": {"law": "상속세 및 증여세법 시행령", "art_no": 38, "branch_no": 0}}
+{"text": "조특법 제10조에 따른 세액공제", "expected": {"law": "조세특례제한법", "art_no": 10, "branch_no": 0}}
+{"text": "구 국세기본법 제5조에 의하면", "expected": {"law": "국세기본법", "art_no": 5, "branch_no": 0}}
+{"text": "구 상속세 및 증여세법(1996. 12. 30. 법률 제5193호로 전부개정되고, 2003. 12. 30. 법률 제7010호로 개정되기 전의 것) 제14조 제2항", "expected": {"law": "상속세 및 증여세법", "art_no": 14, "branch_no": 0}}
+{"text": "구 상속세및증여세법 부칙 제12조 위헌소원", "expected": null}
+{"text": "부가가치세법 제9조에 따른 공급시기", "expected": {"law": "부가가치세법", "art_no": 9, "branch_no": 0}}
+{"text": "법인세법 제52조 제1항에 따른 부당행위계산부인", "expected": {"law": "법인세법", "art_no": 52, "branch_no": 0}}
+{"text": "존재하지않는법 제9999조", "expected": null}
+{"text": "보유기간 2년 이상이 필요하다.", "expected": null}
+{"text": "국기법 제15조에 따른 신의성실 원칙", "expected": {"law": "국세기본법", "art_no": 15, "branch_no": 0}}
+{"text": "2018년6월15일 양도한 경우 소득세법 제89조가 적용된다.", "expected": {"law": "소득세법", "art_no": 89, "branch_no": 0}}
+{"text": "조세특례제한법 제104조의10에 따른 감면", "expected": {"law": "조세특례제한법", "art_no": 104, "branch_no": 10}}
+{"text": "조세특례제한법 시행령 제2조에서 정하는 중소기업 범위", "expected": {"law": "조세특례제한법 시행령", "art_no": 2, "branch_no": 0}}
+{"text": "이 사건은 대법원 2018두12345 판결을 따른다.", "expected": null}
+{"text": "소득세법 및 법인세법에 공통으로 적용되는 원칙", "expected": null}

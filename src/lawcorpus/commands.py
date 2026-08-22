@@ -470,6 +470,61 @@ async def ingest_rulings(target: str, queries: list[str], settings, *, max_pages
 
 
 # ---------------------------------------------------------------------------
+# eval-citations
+# ---------------------------------------------------------------------------
+
+_EVAL_LAW_NAMES = [
+    "국세기본법", "국세기본법 시행령", "소득세법", "법인세법", "부가가치세법",
+    "상속세 및 증여세법", "상속세 및 증여세법 시행령", "조세특례제한법", "조세특례제한법 시행령",
+    "조특법", "국기법",  # resolve_citation의 실제 경로는 _known_law_names가 _LAW_ABBREV.keys()도
+                          # 후보에 넣는다 — 여기서도 같은 후보 집합으로 맞춰야 파서 자체의
+                          # 정확도가 정확히 측정된다(약칭 누락은 파서 결함이 아니라 후보 목록 결함).
+]
+
+
+async def eval_citations(golden_path: str, settings) -> None:
+    """resolve_citation의 핵심(parse_citation)을 골든셋으로 정확도 측정한다.
+
+    설계문서 9절: "5단계에서 정확도를 반드시 수치로 측정하고 넘어간다." DB 접속 없이
+    파싱 단계만 측정한다 — 법령명 인식/조문번호 추출이 이 문제의 핵심이고, 시점 해소는
+    이미 적재된 코퍼스 범위에 따라 결과가 달라져 "파서 자체의 정확도"와 분리해서 봐야 한다.
+    """
+    from pathlib import Path
+
+    from lawcorpus.resolution import parse_citation
+
+    tp = fp = fn = tn = 0
+    for line in Path(golden_path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        case = json.loads(line)
+        expected = case["expected"]
+        result = parse_citation(case["text"], _EVAL_LAW_NAMES)
+        predicted = (
+            {"law": result["law"], "art_no": result["art_no"], "branch_no": result["branch_no"]}
+            if result is not None else None
+        )
+
+        if expected is None and predicted is None:
+            tn += 1
+        elif expected is None and predicted is not None:
+            fp += 1
+        elif expected is not None and predicted is None:
+            fn += 1
+        elif predicted == expected:
+            tp += 1
+        else:
+            fp += 1
+            fn += 1  # 엉뚱한 조문을 정답처럼 반환 — 정밀도와 재현율 둘 다 깎는다
+
+    total = tp + fp + fn + tn
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    print(f"총 {total}건: TP={tp} FP={fp} FN={fn} TN={tn}")
+    print(f"precision={precision:.3f} recall={recall:.3f}")
+
+
+# ---------------------------------------------------------------------------
 # ingest-cases
 # ---------------------------------------------------------------------------
 

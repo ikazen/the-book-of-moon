@@ -36,6 +36,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rulings.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
     p_rulings.add_argument("--max-pages", type=int, default=10)
 
+    p_eval = sub.add_parser("eval-citations", help="resolve_citation 파서 정확도(precision/recall) 측정")
+    p_eval.add_argument("--golden", required=True, help="골든셋 JSONL 경로")
+
     p_cases = sub.add_parser("ingest-cases", help="법제처 OPEN API에서 판례 수집 (참조조문 스코프 필터)")
     p_cases.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
     p_cases.add_argument("--max-pages", type=int, default=50)
@@ -70,6 +73,8 @@ def main() -> None:
         asyncio.run(commands.build_diffs(args.laws, settings))
     elif args.command == "ingest-rulings":
         asyncio.run(commands.ingest_rulings(args.target, args.queries, settings, max_pages=args.max_pages))
+    elif args.command == "eval-citations":
+        asyncio.run(commands.eval_citations(args.golden, settings))
     elif args.command == "ingest-cases":
         asyncio.run(commands.ingest_cases(args.queries, settings, max_pages=args.max_pages))
     elif args.command == "backfill":
