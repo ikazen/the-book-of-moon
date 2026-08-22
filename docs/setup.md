@@ -3,9 +3,10 @@
 ## 사전 요건
 
 - Python 3.12+
-- PostgreSQL 16+ with pgvector extension
-- Neo4j 5.x
-- Ollama (`qwen3-embedding:8b`, `bge-reranker-v2-m3`)
+- PostgreSQL 16+ with pgvector, pg_trgm, btree_gist extensions
+- Neo4j 5.x (Community Edition — 이 인스턴스는 lawcorpus 전용으로 간주, 결정 K)
+- MinIO(원본 XML 보관) — 미설정 시 `LAWCORPUS_RAW_DIR` fs 폴백만 사용
+- Ollama (`qwen3-embedding:8b`, `bge-reranker-v2-m3`) — M7(검색)부터 필요
 
 ## 설정
 
@@ -15,8 +16,9 @@ cp .env.example .env
 ```
 
 필수 설정값은 [`.env.example`](../.env.example) 참조 — `LAWCORPUS_PG_DSN`, `LAWCORPUS_NEO4J_URI`,
-`LAWCORPUS_NEO4J_PASSWORD`, `LAWCORPUS_OLLAMA_BASE_URL`, `LAWCORPUS_LAW_API_OC`(법제처
-[open.law.go.kr](https://open.law.go.kr) 신청 ID, 인제스트 전 필수)가 필수.
+`LAWCORPUS_NEO4J_PASSWORD`, `LAWCORPUS_LAW_API_OC`(법제처 [open.law.go.kr](https://open.law.go.kr)
+신청 ID, 인제스트 전 필수)가 필수. `LAWCORPUS_RAW_S3_*`/`LAWCORPUS_RAW_DIR`은 선택(둘 다 없으면
+fs 폴백 기본 경로 `./data/raw` 사용).
 
 ## DB 스키마 적용
 
@@ -25,34 +27,54 @@ lawcorpus apply-schema
 ```
 
 PG DDL(`schema/schema.sql`) + Neo4j 제약(`schema/neo4j_schema.cypher`)을 멱등 적용한다.
-
-## 데이터 수집 (결정 D)
-
-`LAWCORPUS_LAW_API_OC` 설정 후 순서대로 실행:
+기존 스키마를 지우고 새로 만들려면(파괴적):
 
 ```bash
-lawcorpus ingest-laws \
-  --law 소득세법 --law "소득세법 시행령" --law "소득세법 시행규칙" \
-  --law 법인세법 --law "법인세법 시행령" --law "법인세법 시행규칙" \
-  --law 부가가치세법 --law "부가가치세법 시행령" --law "부가가치세법 시행규칙" \
-  --law 국세기본법 --law "국세기본법 시행령" \
-  --law 조세특례제한법 --law "조세특례제한법 시행령"
-lawcorpus ingest-cases --query 소득세 --query 법인세 --query 부가가치세 \
-                       --query 국세기본법 --query 조세특례
-lawcorpus backfill                # 임베딩 채우기
-lawcorpus update-validity         # validity_flag 계산
+lawcorpus apply-schema --drop --yes-i-mean-it
 ```
 
-법령/검색어는 소비처마다 다를 수 있어 CLI 인자로 받는다 — pot-of-greed는 세무 3법이지만
-다른 소비처는 다른 법령이 필요할 수 있다.
+## 데이터 수집 순서
 
-## validity_flag 갱신
+`LAWCORPUS_LAW_API_OC` 설정 후 법령 단위로 순서대로 실행한다(설계문서 8절):
 
 ```bash
-lawcorpus update-validity
+# 1. 현행 스냅샷 적재 (법률 + 시행령 + 시행규칙)
+lawcorpus ingest-statutes --law 국세기본법 --include-subordinate
+
+# 2. 부칙 파싱
+lawcorpus ingest-addenda --law 국세기본법
+
+# 3. 조문 버전 간 diff + 신설 임계값 추출 (여러 스냅샷이 적재된 뒤에만 실질적 결과가 생긴다)
+lawcorpus build-diffs --law 국세기본법
+
+# 4. 판례/법령해석례/헌재결정례/행정규칙 수집
+lawcorpus ingest-rulings --target prec --query 국세기본법 --query 실질과세
+lawcorpus ingest-rulings --target expc --query 국세기본법
+lawcorpus ingest-rulings --target detc --query 국세기본법
+lawcorpus ingest-rulings --target admrul --query 국세청
+
+# 5. Neo4j 그래프 재생성 (PG를 SoT로 전량 재생성)
+lawcorpus build-graph
+
+# 6. 미개정 생존 구멍 탐지 → loophole_candidate 적재
+lawcorpus find-unpatched --since 2020-01-01
 ```
 
-Neo4j 그래프를 읽어 `case_chunks.validity_flag`를 계산·업데이트한다. 데이터 변경 시 재실행.
+법령/검색어는 소비처마다 다를 수 있어 CLI 인자로 받는다. 전부개정으로 조문번호가 갈아엎어진
+경우의 수작업 매핑은:
+
+```bash
+lawcorpus load-rewrite-map --csv data/rewrite_map.csv
+```
+
+## 인용 해소 정확도 측정
+
+```bash
+lawcorpus eval-citations --golden tests/fixtures/citations.jsonl
+```
+
+`resolve_citation`(법령명+조문번호 파싱)의 precision/recall을 출력한다. 골든셋은 실제 오탐/
+누락이 나올 때마다 추가해서 키워나간다.
 
 ## 테스트
 
@@ -60,4 +82,7 @@ Neo4j 그래프를 읽어 `case_chunks.validity_flag`를 계산·업데이트한
 pytest
 ```
 
-실 DB 불필요 — `get_pool`/`get_driver` 심볼을 monkeypatch로 대체한다.
+대부분은 실 DB 불필요 — `get_pool`/`get_driver` 심볼을 monkeypatch로 대체하거나 fixture
+XML로 순수 함수를 검증한다. `graph/build.py`, `graph_queries.py`, `timeline.py`, `risk.py`처럼
+PG+Neo4j 두 세션을 오가는 orchestration 코드는 자동 테스트 대신 실 DB 스모크로 검증했다
+(각 이슈의 PR 설명 참고) — 목킹보다 실측이 신뢰도가 높다고 판단.
