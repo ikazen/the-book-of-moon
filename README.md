@@ -12,14 +12,15 @@ B 사이의 시점차익·정의불일치 같은 빈틈) 발굴 시스템의 데
 ## 빠른 시작
 
 ```bash
-pip install "lawcorpus @ git+https://github.com/ikazen/the-book-of-moon.git@v1.0.0"
+pip install "lawcorpus @ git+https://github.com/ikazen/the-book-of-moon.git@v1.1.0"
 cp .env.example .env   # LAWCORPUS_PG_DSN 등 채우기
 lawcorpus apply-schema
-lawcorpus ingest-statutes --law 국세기본법 --include-subordinate
+lawcorpus ingest-statutes --law 국세기본법 --include-subordinate --include-history
 lawcorpus ingest-addenda --law 국세기본법
 lawcorpus build-diffs --law 국세기본법
 lawcorpus ingest-rulings --target prec --query 국세기본법
 lawcorpus build-graph
+lawcorpus embed-backfill
 ```
 
 ## 핵심 불변식
@@ -47,7 +48,9 @@ src/lawcorpus/
 │                          find_term_conflicts/get_risk_neighbors/find_unpatched
 ├── timeline.py            get_article_timeline/diff_articles/find_thresholds
 ├── risk.py                get_rulings_for/anti_avoidance_rate/find_claimable
-├── retrieval/              임베딩/재순위(embedder.py, reranker.py) + RRF(fusion.py)
+├── router.py               조문번호 인용 질의는 벡터/키워드 검색 우회 직접 조회
+├── retrieval/              임베딩(embedder.py)/키워드(pg_trgm)/벡터(pgvector)/재순위/RRF융합
+├── search.py               검색 파이프라인 — router→RRF→그래프확장→시점해소→재순위
 ├── commands.py            CLI 서브커맨드 구현
 └── cli.py                argparse 진입점
 ```

@@ -30,18 +30,24 @@ from lawcorpus.retrieval.embedder import embed_batch
 # ingest-statutes (bitemporal 신 스키마 — 현행 스냅샷 1건 적재)
 # ---------------------------------------------------------------------------
 
-async def _upsert_statute(conn: asyncpg.Connection, mapped: MappedStatute, parent_id: int | None) -> None:
+async def _upsert_statute(
+    conn: asyncpg.Connection, mapped: MappedStatute, parent_id: int | None, *, is_current: bool,
+) -> None:
+    """current_mst/enforced_on은 is_current=True(현재 시행 스냅샷)일 때만 덮어쓴다 — 안 그러면
+    이력 백필 루프에서 마지막으로 처리한 과거 MST가 current_mst를 덮어써 delegation edge
+    매칭이 전부 실패한다(the-book-of-moon #48 — DELEGATES/REFERS_TO/MUTATIS가 946개 추출
+    가능한데도 그래프에 0건으로 들어가던 원인, 실측으로 발견)."""
     await conn.execute(
         """
         INSERT INTO statute (statute_id, name, law_type, ministry_code, current_mst, enforced_on, parent_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (statute_id) DO UPDATE SET
-            current_mst = EXCLUDED.current_mst,
-            enforced_on = EXCLUDED.enforced_on,
+            current_mst = CASE WHEN $8 THEN EXCLUDED.current_mst ELSE statute.current_mst END,
+            enforced_on = CASE WHEN $8 THEN EXCLUDED.enforced_on ELSE statute.enforced_on END,
             parent_id = COALESCE(EXCLUDED.parent_id, statute.parent_id)
         """,
         mapped.statute_id, mapped.name, mapped.law_type, mapped.ministry_code,
-        mapped.current_mst, mapped.enforced_on, parent_id,
+        mapped.current_mst, mapped.enforced_on, parent_id, is_current,
     )
 
 
@@ -112,11 +118,12 @@ async def close_versions(conn: asyncpg.Connection, statute_id: int) -> int:
 
 
 async def _ingest_one_statute(
-    conn: asyncpg.Connection, mst: str, settings, *, parent_id: int | None, ef_yd: str | None = None,
+    conn: asyncpg.Connection, mst: str, settings, *,
+    parent_id: int | None, ef_yd: str | None = None, is_current: bool = True,
 ) -> MappedStatute:
     ef_law = await fetch_eflaw(mst, settings, ef_yd=ef_yd)
     mapped = map_eflaw(ef_law)
-    await _upsert_statute(conn, mapped, parent_id)
+    await _upsert_statute(conn, mapped, parent_id, is_current=is_current)
     async with conn.transaction():
         inserted = await _insert_article_versions(conn, mapped)
         await close_versions(conn, mapped.statute_id)
@@ -142,6 +149,7 @@ async def _ingest_mst_with_history(
             try:
                 await _ingest_one_statute(
                     conn, item.mst, settings, parent_id=parent_id, ef_yd=item.effective_date,
+                    is_current=False,
                 )
             except Exception as exc:
                 print(f"[{law_name}] MST={item.mst}({item.effective_date}) 이력 적재 오류: {exc}")

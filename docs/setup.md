@@ -61,6 +61,9 @@ lawcorpus build-graph
 
 # 6. 미개정 생존 구멍 탐지 → loophole_candidate 적재
 lawcorpus find-unpatched --since 2020-01-01
+
+# 7. 현행 조문 항 단위 임베딩 백필 (검색 파이프라인 전제조건)
+lawcorpus embed-backfill
 ```
 
 `--article` 파일의 각 줄은 조문 인용 문자열("국세기본법 제14조")이 아니라 그 조문이 실제로
