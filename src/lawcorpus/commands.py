@@ -14,15 +14,18 @@ from pgvector.asyncpg import register_vector
 
 from lawcorpus.ingest.addendum_parser import parse_addendum
 from lawcorpus.ingest.diff import added_thresholds, diff_trees
+from lawcorpus.ingest.ruling_mapper import MappedRuling, map_ruling
 from lawcorpus.ingest.case_mapper import MappedCase, map_case
 from lawcorpus.ingest.law_api import (
     fetch_case,
     fetch_eflaw,
     fetch_law,
     fetch_law_hierarchy,
+    fetch_ruling,
     list_cases,
     list_eflaws,
     list_laws,
+    list_rulings,
 )
 from lawcorpus.ingest.law_mapper import MappedLaw, map_law
 from lawcorpus.ingest.statute_mapper import MappedStatute, map_eflaw
@@ -394,6 +397,74 @@ async def build_diffs(laws: list[str], settings) -> None:
 
         total = await conn.fetchval("SELECT count(*) FROM article_diff")
         print(f"\n완료. article_diff 전체: {total}행")
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# ingest-rulings (prec/expc/detc/admrul 통합)
+# ---------------------------------------------------------------------------
+
+def _try_parse_yyyymmdd(raw: str) -> date | None:
+    s = raw.strip()
+    if len(s) != 8 or not s.isdigit():
+        return None
+    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+
+
+async def _upsert_ruling(conn: asyncpg.Connection, mapped: MappedRuling) -> bool:
+    result = await conn.execute(
+        """
+        INSERT INTO ruling
+            (ruling_id, source, case_no, decided_on, outcome, gist, body,
+             body_available, anti_avoidance, raw_uri)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (ruling_id) DO NOTHING
+        """,
+        mapped.ruling_id, mapped.source, mapped.case_no, mapped.decided_on, mapped.outcome,
+        mapped.gist, mapped.body, mapped.body_available, list(mapped.anti_avoidance), mapped.raw_uri,
+    )
+    return result == "INSERT 0 1"
+
+
+async def ingest_rulings(target: str, queries: list[str], settings, *, max_pages: int = 10) -> None:
+    """prec/expc/detc/admrul target으로 검색해 상세를 가져와 ruling 테이블에 적재한다.
+    조문 인용(cited_articles/cited_article_ids)은 아직 채우지 않는다 —
+    resolve_citation(#30) 완료 후 별도 백필."""
+    if not settings.law_api_oc:
+        raise SystemExit("LAWCORPUS_LAW_API_OC가 설정되지 않았습니다.")
+
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    try:
+        seen_ids: set[str] = set()
+        inserted = 0
+        for query in queries:
+            items = await list_rulings(target, query, settings, max_pages=max_pages)
+            for item in items:
+                if item.ruling_id in seen_ids:
+                    continue
+                seen_ids.add(item.ruling_id)
+                try:
+                    raw = await fetch_ruling(target, item.ruling_id, settings)
+                    mapped = map_ruling(raw)
+                    if mapped is None:
+                        decided_on = _try_parse_yyyymmdd(item.decided_at)
+                        if decided_on is None:
+                            print(f"[{target}:{item.ruling_id}] 상세 조회 실패 + 날짜 없음, 건너뜀")
+                            continue
+                        # 상세 조회 실패(예: "일치하는 판례가 없습니다") — 목록 메타데이터만으로
+                        # body_available=False 행을 남긴다(완전히 드롭하면 존재 자체를 잊는다).
+                        mapped = MappedRuling(
+                            ruling_id=item.ruling_id, source=item.source, case_no=item.case_no or None,
+                            decided_on=decided_on, outcome=None, gist=item.title,
+                            body="", body_available=False, anti_avoidance=(), raw_uri="",
+                        )
+                    if await _upsert_ruling(conn, mapped):
+                        inserted += 1
+                except Exception as exc:
+                    print(f"[{target}:{item.ruling_id}] 오류: {exc}")
+
+        print(f"\n완료. 조회 {len(seen_ids)}건, 신규 {inserted}건")
     finally:
         await conn.close()
 
