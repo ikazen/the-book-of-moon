@@ -175,6 +175,18 @@ class RawRulingListItem:   # prec/expc/detc/admrul 공통 목록 항목
 
 
 @dataclass(frozen=True, slots=True)
+class RawDelegationEdge:   # target=lsDelegated에서 뽑은 조문 단위 위임/인용/준용 후보
+    source_art_no: int
+    source_branch_no: int
+    source_johang: str        # "제2조제20호가목" — 위임을 트리거한 원문 조항호목
+    edge_type: str            # DELEGATES / REFERS_TO / MUTATIS
+    target_law_mst: str        # 위임법령일련번호
+    target_law_title: str
+    target_art_no: int | None
+    target_branch_no: int
+
+
+@dataclass(frozen=True, slots=True)
 class RawRuling:   # prec/expc/detc/admrul 공통 상세 (실측 결과 필드가 상이해 소스별 파서가 이 타입으로 수렴)
     ruling_id: str
     source: str            # 대법원/법제처/헌법재판소/행정규칙

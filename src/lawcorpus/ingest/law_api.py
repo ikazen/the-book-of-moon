@@ -373,6 +373,18 @@ async def fetch_law_hierarchy(mst: str, settings) -> RawLawHierarchy:
     return parse_lsstmd_xml(root)
 
 
+async def fetch_law_delegations(mst: str, settings) -> ET.Element:
+    """target=lsDelegated — 조문/항/호/목 단위 위임·인용 원문. graph/extract_refs.py가 소비한다."""
+    async with httpx.AsyncClient() as client:
+        root, raw = await _get_xml_raw(
+            client,
+            f"{settings.law_api_base_url}/lawService.do",
+            {"OC": settings.law_api_oc, "target": "lsDelegated", "type": "XML", "MST": mst},
+        )
+    await put_raw(settings, f"lsDelegated/{mst}.xml", raw)
+    return root
+
+
 # ---------------------------------------------------------------------------
 # 쟁송 + 해석 통합 (prec/expc/detc/admrul -> RawRuling)
 #
