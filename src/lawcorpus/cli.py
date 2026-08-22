@@ -38,6 +38,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_statutes.add_argument("--law", action="append", required=True, dest="laws", help="법령명 (반복 가능)")
     p_statutes.add_argument("--include-subordinate", action="store_true",
                              help="체계도(lsStmd)로 시행령/시행규칙도 함께 적재")
+    p_statutes.add_argument("--include-history", action="store_true",
+                             help="과거 개정 스냅샷 전량도 함께 적재 (build-diffs 전제조건)")
 
     p_addenda = sub.add_parser("ingest-addenda", help="이미 적재된 법령의 부칙을 파싱해 적재")
     p_addenda.add_argument("--law", action="append", required=True, dest="laws", help="법령명 (반복 가능)")
@@ -73,7 +75,10 @@ def main() -> None:
             raise SystemExit("--drop은 파괴적 작업입니다. --yes-i-mean-it을 함께 지정하세요.")
         asyncio.run(apply_schema(settings, drop=args.drop))
     elif args.command == "ingest-statutes":
-        asyncio.run(commands.ingest_statutes(args.laws, settings, include_subordinate=args.include_subordinate))
+        asyncio.run(commands.ingest_statutes(
+            args.laws, settings,
+            include_subordinate=args.include_subordinate, include_history=args.include_history,
+        ))
     elif args.command == "ingest-addenda":
         asyncio.run(commands.ingest_addenda(args.laws, settings))
     elif args.command == "build-diffs":

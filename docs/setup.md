@@ -38,8 +38,8 @@ lawcorpus apply-schema --drop --yes-i-mean-it
 `LAWCORPUS_LAW_API_OC` 설정 후 법령 단위로 순서대로 실행한다(설계문서 8절):
 
 ```bash
-# 1. 현행 스냅샷 적재 (법률 + 시행령 + 시행규칙)
-lawcorpus ingest-statutes --law 국세기본법 --include-subordinate
+# 1. 현행 + 과거 개정 스냅샷 전량 적재 (법률 + 시행령 + 시행규칙)
+lawcorpus ingest-statutes --law 국세기본법 --include-subordinate --include-history
 
 # 2. 부칙 파싱
 lawcorpus ingest-addenda --law 국세기본법
