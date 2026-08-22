@@ -303,12 +303,17 @@ def parse_eflaw_xml(root: ET.Element) -> RawEfLaw:
     )
 
 
-async def fetch_eflaw(mst: str, settings) -> RawEfLaw:
+async def fetch_eflaw(mst: str, settings, ef_yd: str | None = None) -> RawEfLaw:
+    """ef_yd(효력일자 YYYYMMDD)가 필요한 경우가 있다 — 실측 결과 현행 스냅샷은 생략 가능하지만
+    과거 스냅샷(list_eflaws가 돌려주는 historical MST)은 ef_yd 없이 호출하면 500 에러가 난다."""
+    params = {"OC": settings.law_api_oc, "target": "eflaw", "type": "XML", "MST": mst}
+    if ef_yd:
+        params["efYd"] = ef_yd
     async with httpx.AsyncClient() as client:
         root, raw = await _get_xml_raw(
             client,
             f"{settings.law_api_base_url}/lawService.do",
-            {"OC": settings.law_api_oc, "target": "eflaw", "type": "XML", "MST": mst},
+            params,
         )
     ef_law = parse_eflaw_xml(root)
     raw_uri = await put_raw(settings, f"eflaw/{mst}.xml", raw)

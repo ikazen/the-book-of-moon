@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import dataclasses
 import importlib.resources
 import json
@@ -522,6 +523,55 @@ async def eval_citations(golden_path: str, settings) -> None:
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     print(f"총 {total}건: TP={tp} FP={fp} FN={fn} TN={tn}")
     print(f"precision={precision:.3f} recall={recall:.3f}")
+
+
+# ---------------------------------------------------------------------------
+# load-rewrite-map
+# ---------------------------------------------------------------------------
+
+async def _resolve_article_id(conn: asyncpg.Connection, statute_name: str, art_no: int, branch_no: int) -> int | None:
+    return await conn.fetchval(
+        """
+        SELECT a.article_id FROM article a JOIN statute s ON s.statute_id = a.statute_id
+        WHERE s.name = $1 AND a.art_no = $2 AND a.art_branch_no = $3
+        """,
+        statute_name, art_no, branch_no,
+    )
+
+
+async def load_rewrite_map(csv_path: str, settings) -> None:
+    """전부개정으로 조문번호가 갈아엎어진 경우의 수작업 매핑을 CSV에서 읽어 적재한다.
+
+    CSV는 article_id(내부 serial) 대신 사람이 알 수 있는 (법령명, 조번호, 가지번호)로
+    적는다 — 로더가 article_id로 해소한다. 컬럼: statute_name,from_art_no,from_branch_no,
+    to_art_no,to_branch_no,note
+    """
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    try:
+        inserted = 0
+        skipped = 0
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                from_id = await _resolve_article_id(
+                    conn, row["statute_name"], int(row["from_art_no"]), int(row.get("from_branch_no") or 0)
+                )
+                to_id = await _resolve_article_id(
+                    conn, row["statute_name"], int(row["to_art_no"]), int(row.get("to_branch_no") or 0)
+                )
+                if from_id is None or to_id is None:
+                    print(f"매핑 실패(조문을 찾을 수 없음): {row}")
+                    skipped += 1
+                    continue
+                result = await conn.execute(
+                    "INSERT INTO article_rewrite_map (from_article_id, to_article_id, note) "
+                    "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                    from_id, to_id, row.get("note", ""),
+                )
+                if result == "INSERT 0 1":
+                    inserted += 1
+        print(f"완료. 신규 {inserted}건, 실패 {skipped}건")
+    finally:
+        await conn.close()
 
 
 # ---------------------------------------------------------------------------
