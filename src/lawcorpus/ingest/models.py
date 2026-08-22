@@ -145,6 +145,7 @@ class RawEfLaw:
     articles: tuple[RawArticleUnit, ...] = ()
     addenda: tuple[RawAddendumUnit, ...] = ()
     revision_reason: str = ""   # 제개정이유내용 (기재부 PDF 대신 법제처가 이미 제공)
+    raw_uri: str = ""           # 원본 XML의 storage.raw_store 저장 위치 (s3:// 또는 file://)
 
 
 @dataclass(frozen=True, slots=True)

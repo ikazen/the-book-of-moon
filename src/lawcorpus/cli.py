@@ -25,6 +25,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_statutes.add_argument("--include-subordinate", action="store_true",
                              help="체계도(lsStmd)로 시행령/시행규칙도 함께 적재")
 
+    p_addenda = sub.add_parser("ingest-addenda", help="이미 적재된 법령의 부칙을 파싱해 적재")
+    p_addenda.add_argument("--law", action="append", required=True, dest="laws", help="법령명 (반복 가능)")
+
     p_cases = sub.add_parser("ingest-cases", help="법제처 OPEN API에서 판례 수집 (참조조문 스코프 필터)")
     p_cases.add_argument("--query", action="append", required=True, dest="queries", help="검색어 (반복 가능)")
     p_cases.add_argument("--max-pages", type=int, default=50)
@@ -53,6 +56,8 @@ def main() -> None:
         asyncio.run(commands.ingest_laws(args.laws, settings))
     elif args.command == "ingest-statutes":
         asyncio.run(commands.ingest_statutes(args.laws, settings, include_subordinate=args.include_subordinate))
+    elif args.command == "ingest-addenda":
+        asyncio.run(commands.ingest_addenda(args.laws, settings))
     elif args.command == "ingest-cases":
         asyncio.run(commands.ingest_cases(args.queries, settings, max_pages=args.max_pages))
     elif args.command == "backfill":
