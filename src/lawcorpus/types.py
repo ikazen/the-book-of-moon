@@ -25,6 +25,7 @@ class Article:
     statute_id: int
     art_no: int
     art_branch_no: int
+    chapter_title: str | None
 
 
 @dataclass(frozen=True, slots=True)

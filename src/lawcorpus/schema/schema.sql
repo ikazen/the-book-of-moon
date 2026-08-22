@@ -19,11 +19,15 @@ CREATE TABLE IF NOT EXISTS statute (
 );
 
 -- 조문 논리 식별자 (버전 무관 — art_branch_no는 "제30조의5"의 5)
+-- chapter_title: eflaw 응답의 조문여부="전문" 헤딩(예: "제3편 거주자의 양도소득에 대한 납세의무")을
+-- 문서 순서대로 추적해 그 다음 조문들에 채운다. 조특법/소득세법처럼 법률 전체가 아니라 일부 편만
+-- 필요한 경우 이 컬럼으로 필터링한다(편/장/절 구분 없이 가장 최근 헤딩 텍스트 그대로 저장).
 CREATE TABLE IF NOT EXISTS article (
     article_id      bigserial PRIMARY KEY,
     statute_id      bigint NOT NULL REFERENCES statute,
     art_no          int    NOT NULL,
     art_branch_no   int    NOT NULL DEFAULT 0,
+    chapter_title   text,
     UNIQUE (statute_id, art_no, art_branch_no)
 );
 

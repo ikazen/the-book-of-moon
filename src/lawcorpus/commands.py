@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.resources
+import json
 from datetime import date
 
 import asyncpg
@@ -11,8 +12,17 @@ from neo4j import AsyncGraphDatabase
 from pgvector.asyncpg import register_vector
 
 from lawcorpus.ingest.case_mapper import MappedCase, map_case
-from lawcorpus.ingest.law_api import fetch_case, fetch_law, list_cases, list_laws
+from lawcorpus.ingest.law_api import (
+    fetch_case,
+    fetch_eflaw,
+    fetch_law,
+    fetch_law_hierarchy,
+    list_cases,
+    list_eflaws,
+    list_laws,
+)
 from lawcorpus.ingest.law_mapper import MappedLaw, map_law
+from lawcorpus.ingest.statute_mapper import MappedStatute, map_eflaw
 from lawcorpus.retrieval.embedder import embed_batch
 
 
@@ -128,6 +138,139 @@ async def ingest_laws(laws: list[str], settings) -> None:
     finally:
         await pg_conn.close()
         await driver.close()
+
+
+# ---------------------------------------------------------------------------
+# ingest-statutes (bitemporal 신 스키마 — 현행 스냅샷 1건 적재)
+# ---------------------------------------------------------------------------
+
+async def _upsert_statute(conn: asyncpg.Connection, mapped: MappedStatute, parent_id: int | None) -> None:
+    await conn.execute(
+        """
+        INSERT INTO statute (statute_id, name, law_type, ministry_code, current_mst, enforced_on, parent_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (statute_id) DO UPDATE SET
+            current_mst = EXCLUDED.current_mst,
+            enforced_on = EXCLUDED.enforced_on,
+            parent_id = COALESCE(EXCLUDED.parent_id, statute.parent_id)
+        """,
+        mapped.statute_id, mapped.name, mapped.law_type, mapped.ministry_code,
+        mapped.current_mst, mapped.enforced_on, parent_id,
+    )
+
+
+async def _get_or_create_article(
+    conn: asyncpg.Connection, statute_id: int, art_no: int, branch_no: int, chapter_title: str | None,
+) -> int:
+    return await conn.fetchval(
+        """
+        INSERT INTO article (statute_id, art_no, art_branch_no, chapter_title)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (statute_id, art_no, art_branch_no) DO UPDATE SET
+            chapter_title = COALESCE(EXCLUDED.chapter_title, article.chapter_title)
+        RETURNING article_id
+        """,
+        statute_id, art_no, branch_no, chapter_title,
+    )
+
+
+async def _insert_article_versions(conn: asyncpg.Connection, mapped: MappedStatute) -> int:
+    inserted = 0
+    async with conn.transaction():
+        for v in mapped.versions:
+            article_id = await _get_or_create_article(conn, mapped.statute_id, v.art_no, v.branch_no, v.chapter_title)
+            result = await conn.execute(
+                """
+                INSERT INTO article_version
+                    (moleg_article_key, article_id, title, body, tree, valid_from,
+                     promulgated_on, promulgation_no, revision_type, is_full_rewrite)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+                ON CONFLICT (article_id, valid_from) DO NOTHING
+                """,
+                v.moleg_article_key, article_id, v.title, v.body, json.dumps(v.tree),
+                v.valid_from, v.promulgated_on, v.promulgation_no, v.revision_type, v.is_full_rewrite,
+            )
+            if result == "INSERT 0 1":
+                inserted += 1
+    return inserted
+
+
+async def close_versions(conn: asyncpg.Connection, statute_id: int) -> int:
+    """각 조문의 버전을 valid_from 순으로 훑어 valid_to(배타적 상한)를 다음 버전의
+    valid_from으로 채운다. 가장 최근 버전만 valid_to=NULL(현재 유효)로 남는다."""
+    rows = await conn.fetch(
+        """
+        SELECT av.article_key, av.article_id, av.valid_from
+        FROM article_version av
+        JOIN article a ON a.article_id = av.article_id
+        WHERE a.statute_id = $1
+        ORDER BY av.article_id, av.valid_from
+        """,
+        statute_id,
+    )
+    by_article: dict[int, list[tuple[int, date]]] = {}
+    for row in rows:
+        by_article.setdefault(row["article_id"], []).append((row["article_key"], row["valid_from"]))
+
+    updated = 0
+    async with conn.transaction():
+        for versions in by_article.values():
+            for i, (article_key, _valid_from) in enumerate(versions):
+                valid_to = versions[i + 1][1] if i + 1 < len(versions) else None
+                result = await conn.execute(
+                    "UPDATE article_version SET valid_to = $1 WHERE article_key = $2 AND valid_to IS DISTINCT FROM $1",
+                    valid_to, article_key,
+                )
+                if result == "UPDATE 1":
+                    updated += 1
+    return updated
+
+
+async def _ingest_one_statute(conn: asyncpg.Connection, mst: str, settings, *, parent_id: int | None) -> MappedStatute:
+    ef_law = await fetch_eflaw(mst, settings)
+    mapped = map_eflaw(ef_law)
+    await _upsert_statute(conn, mapped, parent_id)
+    inserted = await _insert_article_versions(conn, mapped)
+    await close_versions(conn, mapped.statute_id)
+    print(f"[{mapped.name}] MST={mst} 완료: 조문버전 {len(mapped.versions)}건(신규 {inserted})")
+    return mapped
+
+
+async def ingest_statutes(laws: list[str], settings, *, include_subordinate: bool = False) -> None:
+    """법령명별로 현재 시행 중인 eflaw 스냅샷 1건을 적재한다(설계문서 8절 2단계 — 이력 전량은
+    별도로 각 MST에 ingest_statutes 재호출). include_subordinate=True면 체계도(lsStmd)로
+    발견한 시행령/시행규칙도 같은 조문 트리 파이프라인으로 함께 적재하고, statute.parent_id를
+    법률->시행령->시행규칙 순으로 체이닝한다(lsStmd 응답 자체가 이 순서로 중첩돼 있다)."""
+    if not settings.law_api_oc:
+        raise SystemExit("LAWCORPUS_LAW_API_OC가 설정되지 않았습니다.")
+
+    conn = await asyncpg.connect(dsn=settings.pg_dsn)
+    try:
+        for law_name in laws:
+            try:
+                items = await list_eflaws(law_name, settings)
+                current = next((i for i in items if i.is_current), None)
+                if current is None:
+                    print(f"[{law_name}] 현행 스냅샷을 찾지 못함, 건너뜀")
+                    continue
+
+                mapped = await _ingest_one_statute(conn, current.mst, settings, parent_id=None)
+
+                if include_subordinate:
+                    hierarchy = await fetch_law_hierarchy(current.mst, settings)
+                    parent_id = mapped.statute_id
+                    for entry in hierarchy.entries:
+                        if entry.mst == current.mst:
+                            continue
+                        sub_mapped = await _ingest_one_statute(conn, entry.mst, settings, parent_id=parent_id)
+                        parent_id = sub_mapped.statute_id  # 시행규칙은 시행령의 하위로 체이닝
+            except Exception as exc:
+                print(f"[{law_name}] 오류: {exc}")
+
+        total = await conn.fetchval("SELECT count(*) FROM article_version")
+        print(f"\n완료. article_version 전체: {total}행")
+    finally:
+        await conn.close()
 
 
 # ---------------------------------------------------------------------------
