@@ -121,7 +121,8 @@ async def test_get_article_and_resolve_citation_against_real_db():
     try:
         version = await get_article("국세기본법", 2, 0, date.today())
         assert version is not None
-        assert version.valid_to is None  # 현행 스냅샷만 적재돼 있어 전부 열린 버전
+        assert version.valid_from <= date.today()
+        assert version.valid_to is None or version.valid_to > date.today()
 
         resolved = await resolve_citation("국세기본법 제2조")
         assert resolved is not None
