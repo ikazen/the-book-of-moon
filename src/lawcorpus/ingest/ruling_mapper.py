@@ -75,6 +75,7 @@ class MappedRuling:
     body_available: bool
     anti_avoidance: tuple[str, ...]
     raw_uri: str
+    ref_articles: tuple[str, ...] = ()
 
 
 def map_ruling(raw: RawRuling) -> MappedRuling | None:
@@ -104,4 +105,5 @@ def map_ruling(raw: RawRuling) -> MappedRuling | None:
         body_available=bool(raw.body.strip()),
         anti_avoidance=_extract_anti_avoidance(combined),
         raw_uri=raw.raw_uri,
+        ref_articles=raw.ref_articles,
     )

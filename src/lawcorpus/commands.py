@@ -20,6 +20,7 @@ from lawcorpus.ingest.law_api import (
     list_rulings,
 )
 from lawcorpus.ingest.statute_mapper import MappedStatute, map_eflaw
+from lawcorpus.resolution import _known_law_names, parse_citation
 
 
 # ---------------------------------------------------------------------------
@@ -324,36 +325,74 @@ async def build_diffs(laws: list[str], settings) -> None:
 # ---------------------------------------------------------------------------
 
 def _try_parse_yyyymmdd(raw: str) -> date | None:
-    s = raw.strip()
+    """목록 API의 날짜 필드는 소스에 따라 'YYYYMMDD'와 'YYYY.MM.DD' 두 형식이 섞여 온다
+    (실측 — the-book-of-moon #44, prec 검색 결과 중 법원명이 비어있는 하급심 묶음이
+    점 구분 형식을 준다). 점을 먼저 제거해 두 형식을 모두 받는다."""
+    s = raw.strip().replace(".", "").replace(" ", "")
     if len(s) != 8 or not s.isdigit():
         return None
     return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
 
-async def _upsert_ruling(conn: asyncpg.Connection, mapped: MappedRuling) -> bool:
+async def _resolve_ref_articles(
+    conn: asyncpg.Connection, refs: tuple[str, ...], law_names: list[str], decided_on: date,
+) -> tuple[list[int], list[int]]:
+    """ruling.ref_articles(참조조문 원문 조각들)를 조문 버전으로 해소한다.
+
+    lawcorpus.resolution.resolve_citation과 같은 파싱 로직(parse_citation)을 쓰지만, 전역
+    pool(get_pool)이 아니라 ingest_rulings가 이미 열어둔 conn을 그대로 재사용한다 —
+    commands.py의 다른 함수들과 마찬가지로 커넥션을 직접 열고 닫는 방식을 유지한다."""
+    article_keys: list[int] = []
+    article_ids: list[int] = []
+    for ref in refs:
+        parsed = parse_citation(ref, law_names)
+        if parsed is None:
+            continue
+        anchor = parsed["historical_date"] or decided_on
+        row = await conn.fetchrow(
+            """
+            SELECT av.article_key, av.article_id FROM article_version av
+            JOIN article a ON a.article_id = av.article_id
+            JOIN statute s ON s.statute_id = a.statute_id
+            WHERE s.name = $1 AND a.art_no = $2 AND a.art_branch_no = $3
+              AND av.valid_from <= $4 AND (av.valid_to IS NULL OR av.valid_to > $4)
+            """,
+            parsed["law"], parsed["art_no"], parsed["branch_no"], anchor,
+        )
+        if row:
+            article_keys.append(row["article_key"])
+            article_ids.append(row["article_id"])
+    return article_keys, article_ids
+
+
+async def _upsert_ruling(
+    conn: asyncpg.Connection, mapped: MappedRuling, *, cited_articles: list[int], cited_article_ids: list[int],
+) -> bool:
     result = await conn.execute(
         """
         INSERT INTO ruling
             (ruling_id, source, case_no, decided_on, outcome, gist, body,
-             body_available, anti_avoidance, raw_uri)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             body_available, cited_articles, cited_article_ids, anti_avoidance, raw_uri)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (ruling_id) DO NOTHING
         """,
         mapped.ruling_id, mapped.source, mapped.case_no, mapped.decided_on, mapped.outcome,
-        mapped.gist, mapped.body, mapped.body_available, list(mapped.anti_avoidance), mapped.raw_uri,
+        mapped.gist, mapped.body, mapped.body_available, cited_articles, cited_article_ids,
+        list(mapped.anti_avoidance), mapped.raw_uri,
     )
     return result == "INSERT 0 1"
 
 
 async def ingest_rulings(target: str, queries: list[str], settings, *, max_pages: int = 10) -> None:
     """prec/expc/detc/admrul target으로 검색해 상세를 가져와 ruling 테이블에 적재한다.
-    조문 인용(cited_articles/cited_article_ids)은 아직 채우지 않는다 —
-    resolve_citation(#30) 완료 후 별도 백필."""
+    참조조문 원문(ref_articles — prec/detc만 구조화 필드 제공, expc/admrul은 항상 빈 튜플)을
+    resolve_citation과 같은 파싱 로직으로 해소해 cited_articles/cited_article_ids를 채운다."""
     if not settings.law_api_oc:
         raise SystemExit("LAWCORPUS_LAW_API_OC가 설정되지 않았습니다.")
 
     conn = await asyncpg.connect(dsn=settings.pg_dsn)
     try:
+        law_names = await _known_law_names(conn)
         seen_ids: set[str] = set()
         inserted = 0
         for query in queries:
@@ -377,7 +416,12 @@ async def ingest_rulings(target: str, queries: list[str], settings, *, max_pages
                             decided_on=decided_on, outcome=None, gist=item.title,
                             body="", body_available=False, anti_avoidance=(), raw_uri="",
                         )
-                    if await _upsert_ruling(conn, mapped):
+                    cited_articles, cited_article_ids = await _resolve_ref_articles(
+                        conn, mapped.ref_articles, law_names, mapped.decided_on,
+                    )
+                    if await _upsert_ruling(
+                        conn, mapped, cited_articles=cited_articles, cited_article_ids=cited_article_ids,
+                    ):
                         inserted += 1
                 except Exception as exc:
                     print(f"[{target}:{item.ruling_id}] 오류: {exc}")
